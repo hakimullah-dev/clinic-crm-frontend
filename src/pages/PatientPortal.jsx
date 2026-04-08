@@ -7,6 +7,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import { apiBaseUrl, apiConfigError, getApiErrorMessage } from '../lib/config.js'
 
 const TABS = [
   { key: 'appointments', icon: 'calendar', label: 'Appointments' },
@@ -128,12 +129,7 @@ const getAppointments = (payload) =>
   ensureArray(payload, ['appointments', 'data']).map(normalizeAppointment)
 
 const getErrorMessage = (error, fallback = 'Something went wrong.') =>
-  firstValue(
-    error?.response?.data?.message,
-    error?.response?.data?.error,
-    error?.message,
-    fallback,
-  )
+  getApiErrorMessage(error, fallback)
 
 const formatDate = (value) => {
   if (!value) return 'N/A'
@@ -321,7 +317,7 @@ function PatientPortal() {
   const api = useMemo(
     () =>
       axios.create({
-        baseURL: import.meta.env.VITE_API_URL,
+        baseURL: apiBaseUrl,
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       }),
     [token],
@@ -330,6 +326,10 @@ function PatientPortal() {
   const appointmentsQuery = useQuery({
     queryKey: ['patient', 'appointments', patientId],
     queryFn: async () => {
+      if (apiConfigError) {
+        throw new Error(apiConfigError)
+      }
+
       const response = await api.get(`/api/appointments/patient/${patientId}`)
       return markUpcomingAppointments(getAppointments(response.data))
     },

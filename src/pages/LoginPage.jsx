@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import api from '../lib/api.js'
+import { apiConfigError, getApiErrorMessage } from '../lib/config.js'
 
 const normalizeToken = (rawToken) => {
   if (!rawToken) {
@@ -60,6 +61,10 @@ function LoginPage() {
     setIsSubmitting(true)
 
     try {
+      if (apiConfigError) {
+        throw new Error(apiConfigError)
+      }
+
       const response = await api.post('/api/auth/login', formData)
       const { token: rawToken, user, role } = response.data
       const token = normalizeToken(rawToken)
@@ -75,10 +80,7 @@ function LoginPage() {
 
       navigate(targetRoute ?? '/login', { replace: true })
     } catch (requestError) {
-      setError(
-        requestError.response?.data?.message ??
-          'Unable to sign in. Please check your credentials and try again.',
-      )
+      setError(getApiErrorMessage(requestError, 'Unable to sign in. Please check your credentials and try again.'))
     } finally {
       setIsSubmitting(false)
     }

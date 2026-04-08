@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { apiBaseUrl } from './config.js'
 
 const normalizeToken = (rawToken) => {
   if (!rawToken) {
@@ -28,7 +29,7 @@ const clearAuthState = () => {
 }
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL,
+  baseURL: apiBaseUrl,
   timeout: 10000,
 })
 
