@@ -1,20 +1,34 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
+import {
+  getDashboardPathForRole,
+  getStoredRole,
+  isAuthenticated,
+} from './lib/auth.js'
 import AdminDashboard from './pages/AdminDashboard.jsx'
 import DoctorDashboard from './pages/DoctorDashboard.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import PatientPortal from './pages/PatientPortal.jsx'
 import ReceptionistDashboard from './pages/ReceptionistDashboard.jsx'
+import RoleDashboard from './pages/RoleDashboard.jsx'
+
+function AuthenticatedHomeRedirect() {
+  if (!isAuthenticated()) {
+    return <Navigate to="/login" replace />
+  }
+
+  return <Navigate to={getDashboardPathForRole(getStoredRole())} replace />
+}
 
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/login" replace />} />
+      <Route path="/" element={<AuthenticatedHomeRedirect />} />
       <Route path="/login" element={<LoginPage />} />
       <Route
         path="/admin"
         element={
-          <ProtectedRoute role="admin">
+          <ProtectedRoute allowedRoles="admin">
             <AdminDashboard />
           </ProtectedRoute>
         }
@@ -22,7 +36,7 @@ function App() {
       <Route
         path="/doctor"
         element={
-          <ProtectedRoute role="doctor">
+          <ProtectedRoute allowedRoles="doctor">
             <DoctorDashboard />
           </ProtectedRoute>
         }
@@ -30,7 +44,7 @@ function App() {
       <Route
         path="/receptionist"
         element={
-          <ProtectedRoute role="receptionist">
+          <ProtectedRoute allowedRoles="receptionist">
             <ReceptionistDashboard />
           </ProtectedRoute>
         }
@@ -38,12 +52,20 @@ function App() {
       <Route
         path="/patient"
         element={
-          <ProtectedRoute role="patient">
+          <ProtectedRoute allowedRoles="patient">
             <PatientPortal />
           </ProtectedRoute>
         }
       />
-      <Route path="*" element={<Navigate to="/login" replace />} />
+      <Route
+        path="/:role"
+        element={
+          <ProtectedRoute>
+            <RoleDashboard />
+          </ProtectedRoute>
+        }
+      />
+      <Route path="*" element={<AuthenticatedHomeRedirect />} />
     </Routes>
   )
 }

@@ -1,35 +1,13 @@
 import { useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import api from '../lib/api.js'
+import {
+  getDashboardPathForRole,
+  getRoleFromLoginPayload,
+  getStoredRole,
+  persistAuth,
+} from '../lib/auth.js'
 import { apiConfigError, getApiErrorMessage } from '../lib/config.js'
-
-const normalizeToken = (rawToken) => {
-  if (!rawToken) {
-    return ''
-  }
-
-  let token = String(rawToken).trim()
-
-  if (token.startsWith('Bearer ')) {
-    token = token.slice(7).trim()
-  }
-
-  if (
-    (token.startsWith('"') && token.endsWith('"')) ||
-    (token.startsWith("'") && token.endsWith("'"))
-  ) {
-    token = token.slice(1, -1).trim()
-  }
-
-  return token
-}
-
-const dashboardByRole = {
-  admin: '/admin',
-  doctor: '/doctor',
-  receptionist: '/receptionist',
-  patient: '/patient',
-}
 
 function LoginPage() {
   const navigate = useNavigate()
@@ -40,10 +18,10 @@ function LoginPage() {
   const [error, setError] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const existingRole = localStorage.getItem('clinic_role')
+  const existingRole = getStoredRole()
 
-  if (existingRole && dashboardByRole[existingRole]) {
-    return <Navigate to={dashboardByRole[existingRole]} replace />
+  if (existingRole) {
+    return <Navigate to={getDashboardPathForRole(existingRole)} replace />
   }
 
   const handleChange = (event) => {
@@ -66,19 +44,21 @@ function LoginPage() {
       }
 
       const response = await api.post('/api/auth/login', formData)
-      const { token: rawToken, user, role } = response.data
-      const token = normalizeToken(rawToken)
-      const targetRoute = dashboardByRole[role]
+      const { token, user } = response.data
+      const role = getRoleFromLoginPayload(response.data)
+      const targetRoute = getDashboardPathForRole(role)
 
       if (!token) {
         throw new Error('No authentication token returned from login.')
       }
 
-      localStorage.setItem('clinic_token', token)
-      localStorage.setItem('clinic_user', JSON.stringify(user))
-      localStorage.setItem('clinic_role', role)
+      if (!role) {
+        throw new Error('No user role returned from login.')
+      }
 
-      navigate(targetRoute ?? '/login', { replace: true })
+      persistAuth({ token, user, role })
+
+      navigate(targetRoute, { replace: true })
     } catch (requestError) {
       setError(getApiErrorMessage(requestError, 'Unable to sign in. Please check your credentials and try again.'))
     } finally {

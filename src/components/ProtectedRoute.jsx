@@ -1,34 +1,24 @@
 import { Navigate } from 'react-router-dom'
+import {
+  getDashboardPathForRole,
+  getStoredRole,
+  isAuthenticated,
+  normalizeRole,
+} from '../lib/auth.js'
 
-const hasValidToken = () => {
-  const rawToken = localStorage.getItem('clinic_token')
+function ProtectedRoute({ children, allowedRoles }) {
+  const storedRole = getStoredRole()
 
-  if (!rawToken) {
-    return false
-  }
-
-  const token = String(rawToken).trim().replace(/^Bearer\s+/i, '').replace(/^['"]|['"]$/g, '')
-  return Boolean(token)
-}
-
-const dashboardByRole = {
-  admin: '/admin',
-  doctor: '/doctor',
-  receptionist: '/receptionist',
-  patient: '/patient',
-}
-
-function ProtectedRoute({ children, role }) {
-  const storedUser = localStorage.getItem('clinic_user')
-  const storedRole = localStorage.getItem('clinic_role')
-  const hasToken = hasValidToken()
-
-  if (!storedUser || !storedRole || !hasToken) {
+  if (!isAuthenticated()) {
     return <Navigate to="/login" replace />
   }
 
-  if (storedRole !== role) {
-    return <Navigate to={dashboardByRole[storedRole] ?? '/login'} replace />
+  const normalizedAllowedRoles = (Array.isArray(allowedRoles) ? allowedRoles : [allowedRoles])
+    .filter(Boolean)
+    .map((role) => normalizeRole(role))
+
+  if (normalizedAllowedRoles.length > 0 && !normalizedAllowedRoles.includes(storedRole)) {
+    return <Navigate to={getDashboardPathForRole(storedRole)} replace />
   }
 
   return children

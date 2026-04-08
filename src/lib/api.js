@@ -1,32 +1,6 @@
 import axios from 'axios'
+import { clearStoredAuth, normalizeToken } from './auth.js'
 import { apiBaseUrl } from './config.js'
-
-const normalizeToken = (rawToken) => {
-  if (!rawToken) {
-    return ''
-  }
-
-  let token = String(rawToken).trim()
-
-  if (token.startsWith('Bearer ')) {
-    token = token.slice(7).trim()
-  }
-
-  if (
-    (token.startsWith('"') && token.endsWith('"')) ||
-    (token.startsWith("'") && token.endsWith("'"))
-  ) {
-    token = token.slice(1, -1).trim()
-  }
-
-  return token
-}
-
-const clearAuthState = () => {
-  localStorage.removeItem('clinic_token')
-  localStorage.removeItem('clinic_user')
-  localStorage.removeItem('clinic_role')
-}
 
 const api = axios.create({
   baseURL: apiBaseUrl,
@@ -50,15 +24,19 @@ api.interceptors.response.use(
   (error) => {
     const status = error?.response?.status
     const message = String(error?.response?.data?.message || '').toLowerCase()
+    const isTokenError =
+      message.includes('invalid token') ||
+      message.includes('token expired') ||
+      message.includes('expired token') ||
+      message.includes('jwt') ||
+      message.includes('malformed token')
     const isAuthError =
       status === 401 ||
-      status === 403 ||
-      message.includes('invalid token') ||
-      message.includes('unauthorized') ||
-      message.includes('jwt')
+      (status === 403 && isTokenError) ||
+      isTokenError
 
     if (isAuthError) {
-      clearAuthState()
+      clearStoredAuth()
 
       if (window.location.pathname !== '/login') {
         window.location.replace('/login')
