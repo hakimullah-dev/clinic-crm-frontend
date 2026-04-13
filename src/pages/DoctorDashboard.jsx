@@ -6,7 +6,28 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import api from '../lib/api.js'
+import SharedEmptyState from '../components/ui/EmptyState.jsx'
+import SharedLoadingSpinner from '../components/ui/LoadingSpinner.jsx'
+import Pagination from '../components/ui/Pagination.jsx'
+import { clearStoredAuth, getStoredUser } from '../lib/auth.js'
+import {
+  formatDate,
+  formatDateTime,
+  formatTime,
+  getSydneyToday,
+  isPast,
+  isToday,
+} from '../lib/datetime.js'
+import { getIntakeForm as fetchIntakeForm } from '../services/intake.js'
+import {
+  getDoctorAppointments,
+  getDoctorSchedule,
+  getPatientAppointments,
+  updateAppointment as updateAppointmentService,
+  updateAppointmentStatus,
+} from '../services/appointments.js'
+import { getDoctors as fetchDoctors, updateDoctor as updateDoctorService } from '../services/doctors.js'
+import { getPatients as fetchPatients } from '../services/patients.js'
 
 const NAV_ITEMS = [
   { key: 'today', label: "Today's Schedule", icon: '🏠' },
@@ -30,6 +51,7 @@ const inputClasses =
 
 const cardClasses = 'rounded-3xl border border-slate-200 bg-white shadow-sm'
 const EMPTY_ARRAY = []
+const PAGE_SIZE = 10
 
 const ensureArray = (value, keys = []) => {
   if (Array.isArray(value)) return value
@@ -44,38 +66,18 @@ const ensureArray = (value, keys = []) => {
 const firstValue = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== '')
 
-const formatDate = (value) => {
-  if (!value) return 'N/A'
+const getTotalCount = (payload, fallback = 0) => {
+  const total = Number(
+    firstValue(
+      payload?.total,
+      payload?.count,
+      payload?.pagination?.total,
+      payload?.meta?.total,
+      fallback,
+    ),
+  )
 
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-
-  return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' }).format(date)
-}
-
-const formatDateTime = (value) => {
-  if (!value) return 'N/A'
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date)
-}
-
-const formatTime = (value) => {
-  if (!value) return 'N/A'
-  if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-
-  return new Intl.DateTimeFormat('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date)
+  return Number.isFinite(total) ? total : fallback
 }
 
 const getErrorMessage = (error, fallback = 'Something went wrong.') =>
@@ -257,8 +259,8 @@ function SlidingPanel({ open, title, onClose, children }) {
 function DoctorDashboard() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const today = new Date().toISOString().slice(0, 10)
-  const currentUser = JSON.parse(localStorage.getItem('clinic_user') || 'null')
+  const today = getSydneyToday()
+  const currentUser = getStoredUser()
   const doctorId = firstValue(
     currentUser?.id,
     currentUser?._id,
@@ -275,6 +277,8 @@ function DoctorDashboard() {
   const [intakePanelAppointment, setIntakePanelAppointment] = useState(null)
   const [scheduleFilter, setScheduleFilter] = useState('upcoming')
   const [historySearch, setHistorySearch] = useState('')
+  const [patientsPage, setPatientsPage] = useState(1)
+  const [schedulePage, setSchedulePage] = useState(1)
   const [selectedPatient, setSelectedPatient] = useState(null)
   const [historyNotes, setHistoryNotes] = useState({})
   const [clinicalNotes, setClinicalNotes] = useState('')
@@ -287,52 +291,33 @@ function DoctorDashboard() {
   })
 
   const todayAppointmentsQuery = useQuery({
-    queryKey: ['doctor', 'appointments', 'today', doctorId, today],
-    queryFn: async () => {
-      const response = await api.get('/api/appointments', {
-        params: { date: today, doctor_id: doctorId },
-      })
-      return getAppointments(response.data)
-    },
+    queryKey: ['doctor', 'appointments', 'today', doctorId, today, schedulePage],
+    queryFn: () => getDoctorAppointments(doctorId, { date: today, page: schedulePage }),
     enabled: Boolean(doctorId),
   })
 
   const doctorAppointmentsQuery = useQuery({
     queryKey: ['doctor', 'appointments', doctorId],
-    queryFn: async () => {
-      const response = await api.get('/api/appointments', {
-        params: { doctor_id: doctorId },
-      })
-      return getAppointments(response.data)
-    },
+    queryFn: async () => getAppointments(await getDoctorAppointments(doctorId)),
     enabled: Boolean(doctorId),
   })
 
   const weeklyScheduleQuery = useQuery({
     queryKey: ['doctor', 'schedule', doctorId],
-    queryFn: async () => {
-      const response = await api.get(`/api/appointments/doctor/${doctorId}`)
-      return getAppointments(response.data)
-    },
+    queryFn: async () => getAppointments(await getDoctorSchedule(doctorId)),
     enabled: Boolean(doctorId),
   })
 
   const patientsQuery = useQuery({
-    queryKey: ['doctor', 'patients', historySearch],
-    queryFn: async () => {
-      const response = await api.get('/api/patients', {
-        params: { search: historySearch || undefined },
-      })
-      return getPatients(response.data)
-    },
+    queryKey: ['doctor', 'patients', historySearch, patientsPage],
+    queryFn: () => fetchPatients(patientsPage, historySearch),
     enabled: activeSection === 'history',
   })
 
   const doctorProfileQuery = useQuery({
     queryKey: ['doctor', 'profile', doctorId, doctorEmail],
     queryFn: async () => {
-      const response = await api.get('/api/doctors')
-      const doctors = getDoctors(response.data)
+      const doctors = getDoctors(await fetchDoctors())
 
       return (
         doctors.find((doctor) => String(doctor.id) === String(doctorId)) ||
@@ -345,10 +330,7 @@ function DoctorDashboard() {
 
   const patientHistoryQuery = useQuery({
     queryKey: ['doctor', 'patient-history', selectedPatient?.id],
-    queryFn: async () => {
-      const response = await api.get(`/api/appointments/patient/${selectedPatient.id}`)
-      return getAppointments(response.data)
-    },
+    queryFn: async () => getAppointments(await getPatientAppointments(selectedPatient.id)),
     enabled: Boolean(selectedPatient?.id),
   })
 
@@ -356,10 +338,7 @@ function DoctorDashboard() {
 
   const intakeQuery = useQuery({
     queryKey: ['doctor', 'intake-form', intakeAppointmentId],
-    queryFn: async () => {
-      const response = await api.get(`/api/intake-forms/${intakeAppointmentId}`)
-      return normalizeIntake(response.data?.data || response.data)
-    },
+    queryFn: async () => normalizeIntake(await fetchIntakeForm(intakeAppointmentId)),
     enabled: Boolean(intakeAppointmentId),
     retry: false,
   })
@@ -372,23 +351,17 @@ function DoctorDashboard() {
     ])
 
   const statusMutation = useMutation({
-    mutationFn: async ({ id, status }) => {
-      await api.patch(`/api/appointments/${id}/status`, { status })
-    },
+    mutationFn: ({ id, status }) => updateAppointmentStatus(id, status),
     onSuccess: invalidateAppointments,
   })
 
   const notesMutation = useMutation({
-    mutationFn: async ({ id, notes }) => {
-      await api.patch(`/api/appointments/${id}`, { notes })
-    },
+    mutationFn: ({ id, notes }) => updateAppointmentService(id, { notes }),
     onSuccess: invalidateAppointments,
   })
 
   const availabilityMutation = useMutation({
-    mutationFn: async ({ id, payload }) => {
-      await api.patch(`/api/doctors/${id}`, payload)
-    },
+    mutationFn: ({ id, payload }) => updateDoctorService(id, payload),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ['doctor', 'profile'] }),
@@ -399,11 +372,15 @@ function DoctorDashboard() {
   })
 
   const allDoctorAppointments = doctorAppointmentsQuery.data || EMPTY_ARRAY
-  const todayAppointments = todayAppointmentsQuery.data || EMPTY_ARRAY
+  const todayAppointmentsPayload = todayAppointmentsQuery.data || EMPTY_ARRAY
+  const todayAppointments = getAppointments(todayAppointmentsPayload)
   const scheduleAppointments = weeklyScheduleQuery.data || EMPTY_ARRAY
-  const searchedPatients = patientsQuery.data || EMPTY_ARRAY
+  const patientsPayload = patientsQuery.data || EMPTY_ARRAY
+  const searchedPatients = getPatients(patientsPayload)
   const patientHistory = patientHistoryQuery.data || EMPTY_ARRAY
   const doctorProfile = doctorProfileQuery.data || null
+  const todayAppointmentsTotal = getTotalCount(todayAppointmentsPayload, todayAppointments.length)
+  const patientsTotal = getTotalCount(patientsPayload, searchedPatients.length)
 
   const intakeCandidates = useMemo(() => {
     const needle = intakeSearch.trim().toLowerCase()
@@ -418,13 +395,14 @@ function DoctorDashboard() {
     })
   }, [allDoctorAppointments, intakeSearch])
 
+  const paginatedTodayAppointments = todayAppointments
+  const paginatedPatients = searchedPatients
+
   const weeklyGroups = useMemo(() => {
-    const now = new Date()
     const filtered = scheduleAppointments.filter((appointment) => {
       if (scheduleFilter === 'all') return true
 
-      const appointmentDate = new Date(appointment.date_time)
-      return !Number.isNaN(appointmentDate.getTime()) && appointmentDate >= now
+      return !isPast(appointment.date_time)
     })
 
     return filtered.reduce((groups, appointment) => {
@@ -457,7 +435,7 @@ function DoctorDashboard() {
   }
 
   const handleLogout = () => {
-    localStorage.clear()
+    clearStoredAuth()
     navigate('/login', { replace: true })
   }
 
@@ -467,16 +445,16 @@ function DoctorDashboard() {
       title="Today's Schedule"
     >
       {todayAppointmentsQuery.isLoading ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <SharedLoadingSpinner size="md" />
       ) : todayAppointmentsQuery.isError ? (
         <ErrorBanner
           message={getErrorMessage(todayAppointmentsQuery.error, 'Failed to load today schedule.')}
         />
       ) : todayAppointments.length === 0 ? (
-        <EmptyState message="No appointments scheduled for today." />
+        <SharedEmptyState message="No appointments scheduled for today." title="No Appointments" />
       ) : (
         <div className="space-y-4">
-          {todayAppointments.map((appointment) => (
+          {paginatedTodayAppointments.map((appointment) => (
             <article key={appointment.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
@@ -522,6 +500,11 @@ function DoctorDashboard() {
           ))}
         </div>
       )}
+      <Pagination
+        page={schedulePage}
+        totalPages={Math.max(1, Math.ceil(todayAppointmentsTotal / PAGE_SIZE))}
+        onPageChange={setSchedulePage}
+      />
 
       <div className="mt-4">
         <ErrorBanner
@@ -571,7 +554,7 @@ function DoctorDashboard() {
         </div>
 
         {doctorAppointmentsQuery.isLoading ? (
-          <p className="text-sm text-slate-500">Loading...</p>
+          <SharedLoadingSpinner size="md" />
         ) : doctorAppointmentsQuery.isError ? (
           <ErrorBanner
             message={getErrorMessage(doctorAppointmentsQuery.error, 'Failed to load appointments.')}
@@ -579,7 +562,7 @@ function DoctorDashboard() {
         ) : !selectedAppointmentId ? (
           <EmptyState message="Select an appointment to view its intake form." />
         ) : intakeQuery.isLoading ? (
-          <p className="text-sm text-slate-500">Loading...</p>
+          <SharedLoadingSpinner size="md" />
         ) : intakeQuery.isError ? (
           <ErrorBanner message={getErrorMessage(intakeQuery.error, 'Failed to load intake form.')} />
         ) : (
@@ -673,7 +656,7 @@ function DoctorDashboard() {
       title="My Schedule"
     >
       {weeklyScheduleQuery.isLoading ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <SharedLoadingSpinner size="md" />
       ) : weeklyScheduleQuery.isError ? (
         <ErrorBanner
           message={getErrorMessage(weeklyScheduleQuery.error, 'Failed to load doctor schedule.')}
@@ -696,7 +679,11 @@ function DoctorDashboard() {
                   >
                     <div>
                       <p className="font-medium text-slate-900">{appointment.patient_name}</p>
-                      <p className="mt-1 text-sm text-slate-500">{formatDateTime(appointment.date_time)}</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {isToday(appointment.date_time)
+                          ? `Today at ${formatTime(appointment.date_time)}`
+                          : formatDateTime(appointment.date_time)}
+                      </p>
                     </div>
                     <StatusBadge status={appointment.status} />
                   </div>
@@ -730,16 +717,16 @@ function DoctorDashboard() {
             <h3 className="text-base font-semibold text-slate-900">Patients</h3>
             <div className="mt-4">
               {patientsQuery.isLoading ? (
-                <p className="text-sm text-slate-500">Loading...</p>
+                <SharedLoadingSpinner size="md" />
               ) : patientsQuery.isError ? (
                 <ErrorBanner
                   message={getErrorMessage(patientsQuery.error, 'Failed to load patients.')}
                 />
               ) : searchedPatients.length === 0 ? (
-                <EmptyState message="No matching patients found." />
+                <SharedEmptyState message="No matching patients found." title="No Patients" />
               ) : (
                 <div className="space-y-3">
-                  {searchedPatients.map((patient) => (
+                  {paginatedPatients.map((patient) => (
                     <button
                       key={patient.id}
                       className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
@@ -758,6 +745,11 @@ function DoctorDashboard() {
                   ))}
                 </div>
               )}
+              <Pagination
+                page={patientsPage}
+                totalPages={Math.max(1, Math.ceil(patientsTotal / PAGE_SIZE))}
+                onPageChange={setPatientsPage}
+              />
             </div>
           </div>
 
@@ -769,7 +761,7 @@ function DoctorDashboard() {
               {!selectedPatient ? (
                 <EmptyState message="Select a patient to review visit history." />
               ) : patientHistoryQuery.isLoading ? (
-                <p className="text-sm text-slate-500">Loading...</p>
+                <SharedLoadingSpinner size="md" />
               ) : patientHistoryQuery.isError ? (
                 <ErrorBanner
                   message={getErrorMessage(
@@ -778,7 +770,7 @@ function DoctorDashboard() {
                   )}
                 />
               ) : patientHistory.length === 0 ? (
-                <EmptyState message="No visit history found for this patient." />
+                <SharedEmptyState message="No visit history found for this patient." title="No Visit History" />
               ) : (
                 <div className="space-y-4">
                   {patientHistory.map((appointment) => (
@@ -873,7 +865,9 @@ function DoctorDashboard() {
         </p>
 
         {doctorProfileQuery.isLoading ? (
-          <p className="mt-6 text-sm text-slate-500">Loading...</p>
+          <div className="mt-6">
+            <SharedLoadingSpinner size="md" />
+          </div>
         ) : doctorProfileQuery.isError ? (
           <div className="mt-6">
             <ErrorBanner
@@ -1138,7 +1132,7 @@ function DoctorDashboard() {
         title={intakePanelAppointment ? `Intake · ${intakePanelAppointment.patient_name}` : 'Intake'}
       >
         {!intakePanelAppointment ? null : intakeQuery.isLoading ? (
-          <p className="text-sm text-slate-500">Loading...</p>
+          <SharedLoadingSpinner size="md" />
         ) : intakeQuery.isError ? (
           <ErrorBanner message={getErrorMessage(intakeQuery.error, 'Failed to load intake form.')} />
         ) : (

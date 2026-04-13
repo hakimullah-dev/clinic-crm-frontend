@@ -6,7 +6,30 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
-import api from '../lib/api.js'
+import AppointmentCalendar from '../components/AppointmentCalendar.jsx'
+import SharedEmptyState from '../components/ui/EmptyState.jsx'
+import SharedLoadingSpinner from '../components/ui/LoadingSpinner.jsx'
+import Pagination from '../components/ui/Pagination.jsx'
+import { clearStoredAuth, getStoredUser } from '../lib/auth.js'
+import { formatDate, formatDateTime, formatTime, getSydneyToday, isToday } from '../lib/datetime.js'
+import { useForm } from '../lib/useForm.js'
+import { isEmail, isPhone, minLength, required } from '../lib/validators.js'
+import {
+  createAppointment as createAppointmentService,
+  getAppointments as fetchAppointments,
+  getPatientAppointments as fetchPatientAppointments,
+  getSlots as fetchSlots,
+  rescheduleAppointment,
+  updateAppointmentStatus,
+} from '../services/appointments.js'
+import { getDoctors as fetchDoctors } from '../services/doctors.js'
+import {
+  createPatient as createPatientService,
+  getPatientByPhone as fetchPatientByPhone,
+  getPatients as fetchPatients,
+  updatePatient as updatePatientService,
+} from '../services/patients.js'
+import { createWaitlist, getWaitlist as fetchWaitlist, updateWaitlistStatus } from '../services/waitlist.js'
 
 const NAV_ITEMS = [
   { key: 'checkin', label: 'Check-In Board', icon: '📋' },
@@ -31,6 +54,44 @@ const inputClasses =
 
 const cardClasses = 'rounded-3xl border border-slate-200 bg-white shadow-sm'
 const EMPTY_ARRAY = []
+const PAGE_SIZE = 10
+const QUICK_BOOK_FORM_INITIAL_VALUES = {
+  phone: '',
+  patient_id: '',
+  full_name: '',
+  email: '',
+  gender: '',
+  date_of_birth: '',
+  doctor_id: '',
+  date: '',
+  time: '',
+  notes: '',
+}
+const WAITLIST_FORM_INITIAL_VALUES = {
+  phone: '',
+  patient_id: '',
+  full_name: '',
+  email: '',
+  gender: '',
+  date_of_birth: '',
+  doctor_id: '',
+  preferred_date: '',
+}
+const PATIENT_EDIT_FORM_INITIAL_VALUES = {
+  full_name: '',
+  phone: '',
+  email: '',
+}
+const PATIENT_VALIDATION_RULES = {
+  full_name: [required, (value) => minLength(value, 2)],
+  phone: [required, isPhone],
+  email: [isEmail],
+}
+
+const getInputStateClasses = (error) =>
+  error
+    ? `${inputClasses} border-red-500 focus:border-red-500 focus:ring-red-100`
+    : inputClasses
 
 const ensureArray = (value, keys = []) => {
   if (Array.isArray(value)) return value
@@ -44,6 +105,20 @@ const ensureArray = (value, keys = []) => {
 
 const firstValue = (...values) =>
   values.find((value) => value !== undefined && value !== null && value !== '')
+
+const getTotalCount = (payload, fallback = 0) => {
+  const total = Number(
+    firstValue(
+      payload?.total,
+      payload?.count,
+      payload?.pagination?.total,
+      payload?.meta?.total,
+      fallback,
+    ),
+  )
+
+  return Number.isFinite(total) ? total : fallback
+}
 
 const normalizePatient = (patient = {}) => ({
   id: firstValue(patient.id, patient._id, patient.patient_id, ''),
@@ -135,36 +210,6 @@ const getAppointments = (payload) =>
 
 const getWaitlist = (payload) =>
   ensureArray(payload, ['waitlist', 'data']).map(normalizeWaitlist)
-
-const formatDate = (value) => {
-  if (!value) return 'N/A'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat('en-US', { dateStyle: 'medium' }).format(date)
-}
-
-const formatDateTime = (value) => {
-  if (!value) return 'N/A'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat('en-US', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(date)
-}
-
-const formatTime = (value) => {
-  if (!value) return 'N/A'
-  if (/^\d{2}:\d{2}/.test(value)) return value.slice(0, 5)
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-
-  return new Intl.DateTimeFormat('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-  }).format(date)
-}
 
 const getErrorMessage = (error, fallback = 'Something went wrong.') =>
   firstValue(
@@ -290,132 +335,103 @@ function SlidingPanel({ open, title, onClose, children }) {
 function ReceptionistDashboard() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
-  const today = new Date().toISOString().slice(0, 10)
-  const currentUser = JSON.parse(localStorage.getItem('clinic_user') || 'null')
+  const today = getSydneyToday()
+  const currentUser = getStoredUser()
   const receptionistEmail = firstValue(currentUser?.email, 'reception@clinic.com')
 
   const [activeSection, setActiveSection] = useState('checkin')
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [selectedPatient, setSelectedPatient] = useState(null)
   const [searchTerm, setSearchTerm] = useState('')
+  const [appointmentsPage, setAppointmentsPage] = useState(1)
+  const [patientsPage, setPatientsPage] = useState(1)
+  const [waitlistPage, setWaitlistPage] = useState(1)
   const [checkInReschedule, setCheckInReschedule] = useState(null)
   const [rescheduleForm, setRescheduleForm] = useState({ date: today, time: '' })
   const [waitlistModalOpen, setWaitlistModalOpen] = useState(false)
-  const [quickBookForm, setQuickBookForm] = useState({
-    phone: '',
-    patient_id: '',
-    full_name: '',
-    email: '',
-    gender: '',
-    date_of_birth: '',
-    doctor_id: '',
-    date: today,
-    time: '',
-    notes: '',
-  })
   const [quickBookSuccess, setQuickBookSuccess] = useState(null)
-  const [waitlistForm, setWaitlistForm] = useState({
-    phone: '',
-    patient_id: '',
-    full_name: '',
-    email: '',
-    gender: '',
-    date_of_birth: '',
-    doctor_id: '',
-    preferred_date: today,
-  })
-  const [patientEditForm, setPatientEditForm] = useState({
-    full_name: '',
-    phone: '',
-    email: '',
-  })
+  const quickBookFormState = useForm(
+    { ...QUICK_BOOK_FORM_INITIAL_VALUES, date: today },
+    PATIENT_VALIDATION_RULES,
+  )
+  const waitlistFormState = useForm(
+    { ...WAITLIST_FORM_INITIAL_VALUES, preferred_date: today },
+    PATIENT_VALIDATION_RULES,
+  )
+  const patientEditFormState = useForm(
+    PATIENT_EDIT_FORM_INITIAL_VALUES,
+    PATIENT_VALIDATION_RULES,
+  )
+  const quickBookForm = quickBookFormState.values
+  const waitlistForm = waitlistFormState.values
+  const patientEditForm = patientEditFormState.values
+  const setQuickBookForm = (updater) => {
+    const nextValues =
+      typeof updater === 'function' ? updater(quickBookFormState.values) : updater
+    quickBookFormState.setValues(nextValues)
+  }
+  const setWaitlistForm = (updater) => {
+    const nextValues =
+      typeof updater === 'function' ? updater(waitlistFormState.values) : updater
+    waitlistFormState.setValues(nextValues)
+  }
+  const setPatientEditForm = (updater) => {
+    const nextValues =
+      typeof updater === 'function' ? updater(patientEditFormState.values) : updater
+    patientEditFormState.setValues(nextValues)
+  }
 
   const doctorsQuery = useQuery({
     queryKey: ['doctors'],
-    queryFn: async () => {
-      const response = await api.get('/api/doctors')
-      return getDoctors(response.data)
-    },
+    queryFn: async () => getDoctors(await fetchDoctors()),
   })
 
   const todayAppointmentsQuery = useQuery({
-    queryKey: ['reception', 'appointments', 'today', today],
-    queryFn: async () => {
-      const response = await api.get('/api/appointments', {
-        params: { date: today },
-      })
-      return getAppointments(response.data)
-    },
+    queryKey: ['reception', 'appointments', 'today', today, appointmentsPage],
+    queryFn: () => fetchAppointments({ date: today, page: appointmentsPage }),
   })
 
   const waitlistQuery = useQuery({
-    queryKey: ['waitlist'],
-    queryFn: async () => {
-      const response = await api.get('/api/waitlist')
-      return getWaitlist(response.data)
-    },
+    queryKey: ['waitlist', waitlistPage],
+    queryFn: () => fetchWaitlist({ page: waitlistPage }),
     enabled: activeSection === 'waitlist',
   })
 
   const patientsQuery = useQuery({
-    queryKey: ['patients', searchTerm],
-    queryFn: async () => {
-      const response = await api.get('/api/patients', {
-        params: { search: searchTerm || undefined },
-      })
-      return getPatients(response.data)
-    },
+    queryKey: ['patients', searchTerm, patientsPage],
+    queryFn: () => fetchPatients(patientsPage, searchTerm),
     enabled: activeSection === 'search',
   })
 
   const patientAppointmentsQuery = useQuery({
     queryKey: ['appointments', 'patient', selectedPatient?.id],
-    queryFn: async () => {
-      const response = await api.get(`/api/appointments/patient/${selectedPatient.id}`)
-      return getAppointments(response.data)
-    },
+    queryFn: async () => getAppointments(await fetchPatientAppointments(selectedPatient.id)),
     enabled: Boolean(selectedPatient?.id),
   })
 
   const quickLookupQuery = useQuery({
     queryKey: ['patients', 'phone', 'quick-book', quickBookForm.phone],
-    queryFn: async () => {
-      const response = await api.get(`/api/patients/phone/${quickBookForm.phone}`)
-      return normalizePatient(response.data?.data || response.data)
-    },
+    queryFn: async () => normalizePatient(await fetchPatientByPhone(quickBookForm.phone)),
     enabled: activeSection === 'book' && quickBookForm.phone.trim().length >= 5,
     retry: false,
   })
 
   const waitlistLookupQuery = useQuery({
     queryKey: ['patients', 'phone', 'waitlist', waitlistForm.phone],
-    queryFn: async () => {
-      const response = await api.get(`/api/patients/phone/${waitlistForm.phone}`)
-      return normalizePatient(response.data?.data || response.data)
-    },
+    queryFn: async () => normalizePatient(await fetchPatientByPhone(waitlistForm.phone)),
     enabled: waitlistModalOpen && waitlistForm.phone.trim().length >= 5,
     retry: false,
   })
 
   const quickSlotsQuery = useQuery({
     queryKey: ['appointments', 'slots', 'quick-book', quickBookForm.doctor_id, quickBookForm.date],
-    queryFn: async () => {
-      const response = await api.get(`/api/appointments/slots/${quickBookForm.doctor_id}`, {
-        params: { date: quickBookForm.date },
-      })
-      return ensureArray(response.data, ['slots', 'data'])
-    },
+    queryFn: async () => ensureArray(await fetchSlots(quickBookForm.doctor_id, quickBookForm.date), ['slots', 'data']),
     enabled: activeSection === 'book' && Boolean(quickBookForm.doctor_id && quickBookForm.date),
   })
 
   const rescheduleSlotsQuery = useQuery({
     queryKey: ['appointments', 'slots', 'reschedule', checkInReschedule?.doctor_id, rescheduleForm.date],
-    queryFn: async () => {
-      const response = await api.get(`/api/appointments/slots/${checkInReschedule.doctor_id}`, {
-        params: { date: rescheduleForm.date },
-      })
-      return ensureArray(response.data, ['slots', 'data'])
-    },
+    queryFn: async () => ensureArray(await fetchSlots(checkInReschedule.doctor_id, rescheduleForm.date), ['slots', 'data']),
     enabled: Boolean(checkInReschedule?.doctor_id && rescheduleForm.date),
   })
 
@@ -428,16 +444,14 @@ function ReceptionistDashboard() {
     ])
 
   const appointmentStatusMutation = useMutation({
-    mutationFn: async ({ id, status }) => {
-      await api.patch(`/api/appointments/${id}/status`, { status })
-    },
+    mutationFn: ({ id, status }) => updateAppointmentStatus(id, status),
     onSuccess: invalidateCoreData,
   })
 
   const rescheduleMutation = useMutation({
     mutationFn: async ({ id, status, scheduled_at }) => {
-      await api.patch(`/api/appointments/${id}`, { scheduled_at })
-      await api.patch(`/api/appointments/${id}/status`, { status })
+      await rescheduleAppointment(id, { scheduled_at })
+      await updateAppointmentStatus(id, status)
     },
     onSuccess: async () => {
       await invalidateCoreData()
@@ -447,64 +461,49 @@ function ReceptionistDashboard() {
   })
 
   const createPatientMutation = useMutation({
-    mutationFn: async (payload) => {
-      const response = await api.post('/api/patients', payload)
-      return normalizePatient(response.data?.data || response.data)
-    },
+    mutationFn: async (payload) => normalizePatient(await createPatientService(payload)),
     onSuccess: invalidateCoreData,
   })
 
   const createAppointmentMutation = useMutation({
-    mutationFn: async (payload) => {
-      const response = await api.post('/api/appointments', payload)
-      return response.data
-    },
+    mutationFn: createAppointmentService,
     onSuccess: async () => {
       await invalidateCoreData()
     },
   })
 
   const waitlistStatusMutation = useMutation({
-    mutationFn: async ({ id, status }) => {
-      await api.patch(`/api/waitlist/${id}/status`, { status })
-    },
+    mutationFn: ({ id, status }) => updateWaitlistStatus(id, status),
     onSuccess: invalidateCoreData,
   })
 
   const createWaitlistMutation = useMutation({
-    mutationFn: async (payload) => {
-      await api.post('/api/waitlist', payload)
-    },
+    mutationFn: createWaitlist,
     onSuccess: async () => {
       await invalidateCoreData()
       setWaitlistModalOpen(false)
-      setWaitlistForm({
-        phone: '',
-        patient_id: '',
-        full_name: '',
-        email: '',
-        gender: '',
-        date_of_birth: '',
-        doctor_id: '',
-        preferred_date: today,
-      })
+      waitlistFormState.reset({ ...WAITLIST_FORM_INITIAL_VALUES, preferred_date: today })
     },
   })
 
   const updatePatientMutation = useMutation({
-    mutationFn: async ({ id, payload }) => {
-      await api.patch(`/api/patients/${id}`, payload)
-    },
+    mutationFn: ({ id, payload }) => updatePatientService(id, payload),
     onSuccess: invalidateCoreData,
   })
 
   const doctors = doctorsQuery.data || EMPTY_ARRAY
-  const todayAppointments = todayAppointmentsQuery.data || EMPTY_ARRAY
-  const waitlist = waitlistQuery.data || EMPTY_ARRAY
-  const searchedPatients = patientsQuery.data || EMPTY_ARRAY
+  const todayAppointmentsPayload = todayAppointmentsQuery.data || EMPTY_ARRAY
+  const waitlistPayload = waitlistQuery.data || EMPTY_ARRAY
+  const patientsPayload = patientsQuery.data || EMPTY_ARRAY
+  const todayAppointments = getAppointments(todayAppointmentsPayload)
+  const waitlist = getWaitlist(waitlistPayload)
+  const searchedPatients = getPatients(patientsPayload)
   const patientAppointments = patientAppointmentsQuery.data || EMPTY_ARRAY
   const quickLookupPatient = quickLookupQuery.data || null
   const waitlistLookupPatient = waitlistLookupQuery.data || null
+  const todayAppointmentsTotal = getTotalCount(todayAppointmentsPayload, todayAppointments.length)
+  const waitlistTotal = getTotalCount(waitlistPayload, waitlist.length)
+  const patientsTotal = getTotalCount(patientsPayload, searchedPatients.length)
 
   const quickBookingPatient = quickLookupPatient || {
     id: quickBookForm.patient_id,
@@ -532,6 +531,10 @@ function ReceptionistDashboard() {
     [todayAppointments],
   )
 
+  const paginatedTodayAppointments = sortedTodayAppointments
+  const paginatedWaitlist = waitlist
+  const paginatedPatients = searchedPatients
+
   const todaySummary = useMemo(
     () => ({
       total: sortedTodayAppointments.length,
@@ -547,7 +550,7 @@ function ReceptionistDashboard() {
   const pageTitle = NAV_ITEMS.find((item) => item.key === activeSection)?.label || 'Reception'
 
   const handleLogout = () => {
-    localStorage.clear()
+    clearStoredAuth()
     navigate('/login', { replace: true })
   }
 
@@ -579,13 +582,13 @@ function ReceptionistDashboard() {
         title="Check-In Board"
       >
         {todayAppointmentsQuery.isLoading ? (
-          <p className="text-sm text-slate-500">Loading...</p>
+          <SharedLoadingSpinner size="md" />
         ) : todayAppointmentsQuery.isError ? (
           <ErrorBanner
             message={getErrorMessage(todayAppointmentsQuery.error, 'Failed to load appointments.')}
           />
         ) : sortedTodayAppointments.length === 0 ? (
-          <EmptyState message="No appointments scheduled for today." />
+          <SharedEmptyState message="No appointments scheduled for today." title="No Appointments" />
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -599,7 +602,7 @@ function ReceptionistDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {sortedTodayAppointments.map((appointment) => (
+                {paginatedTodayAppointments.map((appointment) => (
                   <tr key={appointment.id} className="border-b border-slate-100 align-top">
                     <td className="py-4 pr-4 text-slate-600">{formatTime(appointment.date_time)}</td>
                     <td className="py-4 pr-4 font-medium text-slate-900">{appointment.patient_name}</td>
@@ -664,6 +667,12 @@ function ReceptionistDashboard() {
           </div>
         )}
 
+        <Pagination
+          page={appointmentsPage}
+          totalPages={Math.max(1, Math.ceil(todayAppointmentsTotal / PAGE_SIZE))}
+          onPageChange={setAppointmentsPage}
+        />
+
         <div className="mt-4">
           <ErrorBanner
             message={
@@ -677,6 +686,13 @@ function ReceptionistDashboard() {
           />
         </div>
       </SectionShell>
+
+      <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-lg font-medium text-slate-900">Appointment Calendar</h2>
+        <div className="mt-4">
+          <AppointmentCalendar />
+        </div>
+      </div>
     </div>
   )
 
@@ -687,7 +703,9 @@ function ReceptionistDashboard() {
           <p className="text-sm font-semibold uppercase tracking-[0.18em] text-cyan-700">Step 1</p>
           <Field label="Patient phone">
             <input
-              className={inputClasses}
+              className={getInputStateClasses(quickBookFormState.errors.phone)}
+              name="phone"
+              onBlur={quickBookFormState.handleBlur}
               onChange={(event) =>
                 setQuickBookForm((current) => ({
                   ...current,
@@ -703,6 +721,9 @@ function ReceptionistDashboard() {
               type="text"
               value={quickBookForm.phone}
             />
+            {quickBookFormState.errors.phone ? (
+              <p className="mt-1 text-sm text-red-500">{quickBookFormState.errors.phone}</p>
+            ) : null}
           </Field>
 
           {quickLookupQuery.isLoading ? (
@@ -718,23 +739,33 @@ function ReceptionistDashboard() {
               <div className="grid gap-4 md:grid-cols-2">
                 <Field label="Full name">
                   <input
-                    className={inputClasses}
+                    className={getInputStateClasses(quickBookFormState.errors.full_name)}
+                    name="full_name"
+                    onBlur={quickBookFormState.handleBlur}
                     onChange={(event) =>
                       setQuickBookForm((current) => ({ ...current, full_name: event.target.value }))
                     }
                     type="text"
                     value={quickBookForm.full_name}
                   />
+                  {quickBookFormState.errors.full_name ? (
+                    <p className="mt-1 text-sm text-red-500">{quickBookFormState.errors.full_name}</p>
+                  ) : null}
                 </Field>
                 <Field label="Email">
                   <input
-                    className={inputClasses}
+                    className={getInputStateClasses(quickBookFormState.errors.email)}
+                    name="email"
+                    onBlur={quickBookFormState.handleBlur}
                     onChange={(event) =>
                       setQuickBookForm((current) => ({ ...current, email: event.target.value }))
                     }
                     type="email"
                     value={quickBookForm.email}
                   />
+                  {quickBookFormState.errors.email ? (
+                    <p className="mt-1 text-sm text-red-500">{quickBookFormState.errors.email}</p>
+                  ) : null}
                 </Field>
                 <Field label="Gender">
                   <select
@@ -770,12 +801,17 @@ function ReceptionistDashboard() {
                   className="rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                   disabled={
                     createPatientMutation.isPending ||
+                    !quickBookFormState.isValid ||
                     !quickBookForm.full_name ||
                     !quickBookForm.phone ||
                     !quickBookForm.gender ||
                     !quickBookForm.date_of_birth
                   }
                   onClick={async () => {
+                    if (!quickBookFormState.validateAll()) {
+                      return
+                    }
+
                     const created = await createPatientMutation.mutateAsync({
                       full_name: quickBookForm.full_name,
                       phone: quickBookForm.phone,
@@ -980,11 +1016,14 @@ function ReceptionistDashboard() {
       title="Waitlist"
     >
       {waitlistQuery.isLoading ? (
-        <p className="text-sm text-slate-500">Loading...</p>
+        <SharedLoadingSpinner size="md" />
       ) : waitlistQuery.isError ? (
         <ErrorBanner message={getErrorMessage(waitlistQuery.error, 'Failed to load waitlist.')} />
       ) : waitlist.length === 0 ? (
-        <EmptyState message="No patients are currently on the waitlist." />
+        <SharedEmptyState
+          message="No patients are currently on the waitlist."
+          title="No Waitlist Entries"
+        />
       ) : (
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -999,7 +1038,7 @@ function ReceptionistDashboard() {
               </tr>
             </thead>
             <tbody>
-              {waitlist.map((item) => (
+              {paginatedWaitlist.map((item) => (
                 <tr key={item.id} className="border-b border-slate-100">
                   <td className="py-4 pr-4 font-medium text-slate-900">{item.patient_name}</td>
                   <td className="py-4 pr-4 text-slate-600">{item.doctor_name}</td>
@@ -1033,6 +1072,12 @@ function ReceptionistDashboard() {
         </div>
       )}
 
+      <Pagination
+        page={waitlistPage}
+        totalPages={Math.max(1, Math.ceil(waitlistTotal / PAGE_SIZE))}
+        onPageChange={setWaitlistPage}
+      />
+
       <div className="mt-4">
         <ErrorBanner
           message={
@@ -1059,11 +1104,11 @@ function ReceptionistDashboard() {
         </Field>
 
         {patientsQuery.isLoading ? (
-          <p className="text-sm text-slate-500">Loading...</p>
+          <SharedLoadingSpinner size="md" />
         ) : patientsQuery.isError ? (
           <ErrorBanner message={getErrorMessage(patientsQuery.error, 'Failed to load patients.')} />
         ) : searchedPatients.length === 0 ? (
-          <EmptyState message="No patients found." />
+          <SharedEmptyState message="No patients found." title="No Patients" />
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -1077,7 +1122,7 @@ function ReceptionistDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {searchedPatients.map((patient) => (
+                {paginatedPatients.map((patient) => (
                   <tr key={patient.id} className="border-b border-slate-100">
                     <td className="py-4 pr-4 font-medium text-slate-900">{patient.full_name}</td>
                     <td className="py-4 pr-4 text-slate-600">{patient.phone || 'N/A'}</td>
@@ -1088,7 +1133,7 @@ function ReceptionistDashboard() {
                         className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-cyan-700"
                         onClick={() => {
                           setSelectedPatient(patient)
-                          setPatientEditForm({
+                          patientEditFormState.reset({
                             full_name: patient.full_name || '',
                             phone: patient.phone || '',
                             email: patient.email || '',
@@ -1105,6 +1150,11 @@ function ReceptionistDashboard() {
             </table>
           </div>
         )}
+        <Pagination
+          page={patientsPage}
+          totalPages={Math.max(1, Math.ceil(patientsTotal / PAGE_SIZE))}
+          onPageChange={setPatientsPage}
+        />
       </div>
     </SectionShell>
   )
@@ -1315,19 +1365,10 @@ function ReceptionistDashboard() {
 
       <Modal
         maxWidth="max-w-3xl"
-        onClose={() => {
-          setWaitlistModalOpen(false)
-          setWaitlistForm({
-            phone: '',
-            patient_id: '',
-            full_name: '',
-            email: '',
-            gender: '',
-            date_of_birth: '',
-            doctor_id: '',
-            preferred_date: today,
-          })
-        }}
+            onClose={() => {
+              setWaitlistModalOpen(false)
+              waitlistFormState.reset({ ...WAITLIST_FORM_INITIAL_VALUES, preferred_date: today })
+            }}
         open={waitlistModalOpen}
         title="Add to Waitlist"
       >
@@ -1336,22 +1377,27 @@ function ReceptionistDashboard() {
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-cyan-700">Patient Lookup</p>
             <Field label="Patient phone">
               <input
-                className={inputClasses}
+                className={getInputStateClasses(waitlistFormState.errors.phone)}
+                name="phone"
+                onBlur={waitlistFormState.handleBlur}
                 onChange={(event) =>
-                setWaitlistForm((current) => ({
-                  ...current,
-                  phone: event.target.value,
-                  patient_id: '',
-                  full_name: '',
-                  email: '',
-                  gender: '',
-                  date_of_birth: '',
-                }))
-              }
+                  setWaitlistForm((current) => ({
+                    ...current,
+                    phone: event.target.value,
+                    patient_id: '',
+                    full_name: '',
+                    email: '',
+                    gender: '',
+                    date_of_birth: '',
+                  }))
+                }
                 placeholder="0300 0000000"
                 type="text"
                 value={waitlistForm.phone}
               />
+              {waitlistFormState.errors.phone ? (
+                <p className="mt-1 text-sm text-red-500">{waitlistFormState.errors.phone}</p>
+              ) : null}
             </Field>
 
             {waitlistLookupQuery.isLoading ? (
@@ -1367,7 +1413,9 @@ function ReceptionistDashboard() {
                 <div className="grid gap-4 md:grid-cols-2">
                   <Field label="Full name">
                     <input
-                      className={inputClasses}
+                      className={getInputStateClasses(waitlistFormState.errors.full_name)}
+                      name="full_name"
+                      onBlur={waitlistFormState.handleBlur}
                       onChange={(event) =>
                         setWaitlistForm((current) => ({
                           ...current,
@@ -1377,10 +1425,15 @@ function ReceptionistDashboard() {
                       type="text"
                       value={waitlistForm.full_name}
                     />
+                    {waitlistFormState.errors.full_name ? (
+                      <p className="mt-1 text-sm text-red-500">{waitlistFormState.errors.full_name}</p>
+                    ) : null}
                   </Field>
                   <Field label="Email">
                     <input
-                      className={inputClasses}
+                      className={getInputStateClasses(waitlistFormState.errors.email)}
+                      name="email"
+                      onBlur={waitlistFormState.handleBlur}
                       onChange={(event) =>
                         setWaitlistForm((current) => ({
                           ...current,
@@ -1390,6 +1443,9 @@ function ReceptionistDashboard() {
                       type="email"
                       value={waitlistForm.email}
                     />
+                    {waitlistFormState.errors.email ? (
+                      <p className="mt-1 text-sm text-red-500">{waitlistFormState.errors.email}</p>
+                    ) : null}
                   </Field>
                   <Field label="Gender">
                     <select
@@ -1428,12 +1484,17 @@ function ReceptionistDashboard() {
                     className="rounded-2xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-slate-300"
                     disabled={
                       createPatientMutation.isPending ||
+                      !waitlistFormState.isValid ||
                       !waitlistForm.full_name ||
                       !waitlistForm.phone ||
                       !waitlistForm.gender ||
                       !waitlistForm.date_of_birth
                     }
                     onClick={async () => {
+                      if (!waitlistFormState.validateAll()) {
+                        return
+                      }
+
                       const created = await createPatientMutation.mutateAsync({
                         full_name: waitlistForm.full_name,
                         phone: waitlistForm.phone,
@@ -1524,16 +1585,7 @@ function ReceptionistDashboard() {
               className="rounded-2xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
               onClick={() => {
                 setWaitlistModalOpen(false)
-                setWaitlistForm({
-                  phone: '',
-                  patient_id: '',
-                  full_name: '',
-                  email: '',
-                  gender: '',
-                  date_of_birth: '',
-                  doctor_id: '',
-                  preferred_date: today,
-                })
+                waitlistFormState.reset({ ...WAITLIST_FORM_INITIAL_VALUES, preferred_date: today })
               }}
               type="button"
             >
@@ -1613,7 +1665,11 @@ function ReceptionistDashboard() {
                       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                           <p className="font-medium text-slate-900">{appointment.doctor_name}</p>
-                          <p className="mt-1 text-slate-500">{formatDateTime(appointment.date_time)}</p>
+                          <p className="mt-1 text-slate-500">
+                            {isToday(appointment.date_time)
+                              ? `Today at ${formatTime(appointment.date_time)}`
+                              : formatDateTime(appointment.date_time)}
+                          </p>
                         </div>
                         <StatusBadge status={appointment.status} />
                       </div>
@@ -1629,42 +1685,42 @@ function ReceptionistDashboard() {
             <div className="mt-4 grid gap-4">
               <Field label="Full name">
                 <input
-                  className={inputClasses}
-                  onChange={(event) =>
-                    setPatientEditForm((current) => ({
-                      ...current,
-                      full_name: event.target.value,
-                    }))
-                  }
+                  className={getInputStateClasses(patientEditFormState.errors.full_name)}
+                  name="full_name"
+                  onBlur={patientEditFormState.handleBlur}
+                  onChange={patientEditFormState.handleChange}
                   type="text"
                   value={patientEditForm.full_name}
                 />
+                {patientEditFormState.errors.full_name ? (
+                  <p className="mt-1 text-sm text-red-500">{patientEditFormState.errors.full_name}</p>
+                ) : null}
               </Field>
               <Field label="Phone">
                 <input
-                  className={inputClasses}
-                  onChange={(event) =>
-                    setPatientEditForm((current) => ({
-                      ...current,
-                      phone: event.target.value,
-                    }))
-                  }
+                  className={getInputStateClasses(patientEditFormState.errors.phone)}
+                  name="phone"
+                  onBlur={patientEditFormState.handleBlur}
+                  onChange={patientEditFormState.handleChange}
                   type="text"
                   value={patientEditForm.phone}
                 />
+                {patientEditFormState.errors.phone ? (
+                  <p className="mt-1 text-sm text-red-500">{patientEditFormState.errors.phone}</p>
+                ) : null}
               </Field>
               <Field label="Email">
                 <input
-                  className={inputClasses}
-                  onChange={(event) =>
-                    setPatientEditForm((current) => ({
-                      ...current,
-                      email: event.target.value,
-                    }))
-                  }
+                  className={getInputStateClasses(patientEditFormState.errors.email)}
+                  name="email"
+                  onBlur={patientEditFormState.handleBlur}
+                  onChange={patientEditFormState.handleChange}
                   type="email"
                   value={patientEditForm.email}
                 />
+                {patientEditFormState.errors.email ? (
+                  <p className="mt-1 text-sm text-red-500">{patientEditFormState.errors.email}</p>
+                ) : null}
               </Field>
             </div>
 
@@ -1679,8 +1735,18 @@ function ReceptionistDashboard() {
             <div className="mt-6 flex justify-end">
               <button
                 className="rounded-2xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-                disabled={updatePatientMutation.isPending || !selectedPatient?.id}
+                disabled={
+                  updatePatientMutation.isPending ||
+                  !selectedPatient?.id ||
+                  !patientEditFormState.isValid ||
+                  !patientEditForm.full_name.trim() ||
+                  !patientEditForm.phone.trim()
+                }
                 onClick={async () => {
+                  if (!patientEditFormState.validateAll()) {
+                    return
+                  }
+
                   await updatePatientMutation.mutateAsync({
                     id: selectedPatient.id,
                     payload: patientEditForm,

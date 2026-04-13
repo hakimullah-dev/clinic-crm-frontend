@@ -1,8 +1,33 @@
 const trimTrailingSlash = (value) => value.replace(/\/+$/, '')
 
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0'])
+const canUseWindow = typeof window !== 'undefined'
+
 const rawApiUrl = String(import.meta.env.VITE_API_URL || '').trim()
 
-export const apiBaseUrl = rawApiUrl ? trimTrailingSlash(rawApiUrl) : ''
+const isLocalUrl = (value) => {
+  if (!value) return false
+
+  try {
+    return LOCAL_HOSTS.has(new URL(value).hostname)
+  } catch {
+    return false
+  }
+}
+
+const windowOrigin = canUseWindow ? trimTrailingSlash(window.location.origin) : ''
+const deployedHost = canUseWindow ? window.location.hostname : ''
+const shouldUseWindowOrigin =
+  import.meta.env.PROD &&
+  windowOrigin &&
+  !LOCAL_HOSTS.has(deployedHost) &&
+  (!rawApiUrl || isLocalUrl(rawApiUrl))
+
+export const apiBaseUrl = shouldUseWindowOrigin
+  ? windowOrigin
+  : rawApiUrl
+    ? trimTrailingSlash(rawApiUrl)
+    : ''
 
 export const apiConfigError = apiBaseUrl
   ? ''

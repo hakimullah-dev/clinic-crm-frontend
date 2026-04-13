@@ -10,9 +10,9 @@ const ROLE_PATH_ALIASES = {
   'super-admin': 'admin',
 }
 
-const TOKEN_STORAGE_KEY = 'clinic_token'
-const USER_STORAGE_KEY = 'clinic_user'
-const ROLE_STORAGE_KEY = 'clinic_role'
+const TOKEN_STORAGE_KEY = 'token'
+const USER_STORAGE_KEY = 'user'
+const ROLE_STORAGE_KEY = 'role'
 
 export const normalizeToken = (rawToken) => {
   if (!rawToken) {
@@ -89,13 +89,15 @@ export const getStoredUser = () => {
   }
 }
 
-export const hasValidStoredToken = () => Boolean(normalizeToken(localStorage.getItem(TOKEN_STORAGE_KEY)))
+export const getStoredToken = () => normalizeToken(sessionStorage.getItem(TOKEN_STORAGE_KEY))
+
+export const hasValidStoredToken = () => Boolean(getStoredToken())
 
 export const isAuthenticated = () =>
-  Boolean(getStoredUser() && getStoredRole() && hasValidStoredToken())
+  Boolean(getStoredRole() && hasValidStoredToken())
 
 export const clearStoredAuth = () => {
-  localStorage.removeItem(TOKEN_STORAGE_KEY)
+  sessionStorage.removeItem(TOKEN_STORAGE_KEY)
   localStorage.removeItem(USER_STORAGE_KEY)
   localStorage.removeItem(ROLE_STORAGE_KEY)
 }
@@ -103,10 +105,24 @@ export const clearStoredAuth = () => {
 export const persistAuth = ({ token, user, role }) => {
   const normalizedToken = normalizeToken(token)
   const normalizedRole = normalizeRole(role)
+  const storedUser = user
+    ? {
+        id: user.id ?? user._id ?? user.user_id ?? user.patient_id ?? user.doctor_id ?? null,
+      }
+    : null
 
-  localStorage.setItem(TOKEN_STORAGE_KEY, normalizedToken)
-  localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user || null))
-  localStorage.setItem(ROLE_STORAGE_KEY, normalizedRole)
+  sessionStorage.setItem(TOKEN_STORAGE_KEY, normalizedToken)
+  if (storedUser) {
+    localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(storedUser))
+  } else {
+    localStorage.removeItem(USER_STORAGE_KEY)
+  }
+
+  if (normalizedRole) {
+    localStorage.setItem(ROLE_STORAGE_KEY, normalizedRole)
+  } else {
+    localStorage.removeItem(ROLE_STORAGE_KEY)
+  }
 }
 
 export const authStorageKeys = {

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { clearStoredAuth, normalizeToken } from './auth.js'
+import { clearStoredAuth, getStoredToken } from './auth.js'
 import { apiBaseUrl } from './config.js'
 
 const api = axios.create({
@@ -8,12 +8,11 @@ const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  const token = normalizeToken(localStorage.getItem('clinic_token'))
+  const token = getStoredToken()
 
   if (token) {
     config.headers = config.headers ?? {}
     config.headers.Authorization = `Bearer ${token}`
-    localStorage.setItem('clinic_token', token)
   }
 
   return config
@@ -30,17 +29,11 @@ api.interceptors.response.use(
       message.includes('expired token') ||
       message.includes('jwt') ||
       message.includes('malformed token')
-    const isAuthError =
-      status === 401 ||
-      (status === 403 && isTokenError) ||
-      isTokenError
+    const isAuthError = status === 401 || (status === 403 && isTokenError) || isTokenError
 
     if (isAuthError) {
       clearStoredAuth()
-
-      if (window.location.pathname !== '/login') {
-        window.location.replace('/login')
-      }
+      window.location.href = '/login'
     }
 
     return Promise.reject(error)
