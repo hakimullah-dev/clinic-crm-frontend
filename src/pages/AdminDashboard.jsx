@@ -2468,7 +2468,9 @@ function AdminDashboard() {
         title={doctorModal.doctor ? 'Edit Doctor' : 'Add Doctor'}
       >
         <form
+          autoComplete="off"
           className="space-y-4"
+          key={doctorModal.doctor?.id || 'new-doctor'}
           onSubmit={doctorFormState.handleSubmit((values) => {
             const payload = {
               ...values,
@@ -2490,84 +2492,95 @@ function AdminDashboard() {
             createDoctorMutation.mutate(payload)
           })}
         >
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Full name">
-              <input
-                className={getInputStateClasses(doctorFormState.errors.full_name)}
-                name="full_name"
-                onBlur={doctorFormState.handleBlur}
-                onChange={doctorFormState.handleChange}
-                type="text"
-                value={doctorForm.full_name}
-              />
-              {doctorFormState.errors.full_name ? (
-                <p className="mt-1 text-sm text-red-500">{doctorFormState.errors.full_name}</p>
-              ) : null}
-            </Field>
-            <Field label="Specialty">
-              <input
-                className={getInputStateClasses(doctorFormState.errors.specialty)}
-                name="specialty"
-                onBlur={doctorFormState.handleBlur}
-                onChange={doctorFormState.handleChange}
-                type="text"
-                value={doctorForm.specialty}
-              />
-              {doctorFormState.errors.specialty ? (
-                <p className="mt-1 text-sm text-red-500">{doctorFormState.errors.specialty}</p>
-              ) : null}
-            </Field>
-            <Field label="Email">
-              <input
-                className={getInputStateClasses(doctorFormState.errors.email)}
-                name="email"
-                onBlur={doctorFormState.handleBlur}
-                onChange={doctorFormState.handleChange}
-                type="email"
-                value={doctorForm.email}
-              />
-              {doctorFormState.errors.email ? (
-                <p className="mt-1 text-sm text-red-500">{doctorFormState.errors.email}</p>
-              ) : null}
-            </Field>
-            <Field
-              label={
-                doctorModal.doctor
-                  ? 'Password (leave blank to keep current)'
-                  : 'Password'
-              }
-            >
-              <input
-                className={getInputStateClasses(doctorFormState.errors.password)}
-                name="password"
-                onBlur={doctorFormState.handleBlur}
-                onChange={doctorFormState.handleChange}
-                placeholder={
+          <section className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Full name">
+                <input
+                  autoComplete="name"
+                  className={getInputStateClasses(doctorFormState.errors.full_name)}
+                  name="full_name"
+                  onBlur={doctorFormState.handleBlur}
+                  onChange={doctorFormState.handleChange}
+                  type="text"
+                  value={doctorForm.full_name}
+                />
+                {doctorFormState.errors.full_name ? (
+                  <p className="mt-1 text-sm text-red-500">{doctorFormState.errors.full_name}</p>
+                ) : null}
+              </Field>
+              <Field label="Specialty">
+                <input
+                  className={getInputStateClasses(doctorFormState.errors.specialty)}
+                  name="specialty"
+                  onBlur={doctorFormState.handleBlur}
+                  onChange={doctorFormState.handleChange}
+                  type="text"
+                  value={doctorForm.specialty}
+                />
+                {doctorFormState.errors.specialty ? (
+                  <p className="mt-1 text-sm text-red-500">{doctorFormState.errors.specialty}</p>
+                ) : null}
+              </Field>
+              <Field label="Email">
+                <input
+                  autoComplete="email"
+                  className={getInputStateClasses(doctorFormState.errors.email)}
+                  name="email"
+                  onBlur={doctorFormState.handleBlur}
+                  onChange={doctorFormState.handleChange}
+                  type="email"
+                  value={doctorForm.email}
+                />
+                {doctorFormState.errors.email ? (
+                  <p className="mt-1 text-sm text-red-500">{doctorFormState.errors.email}</p>
+                ) : null}
+              </Field>
+              <Field
+                label={
                   doctorModal.doctor
-                    ? 'Enter new password only if you want to change it'
-                    : 'Set login password'
+                    ? 'Password (leave blank to keep current)'
+                    : 'Password'
                 }
-                type="password"
-                value={doctorForm.password}
-              />
-              {doctorFormState.errors.password ? (
-                <p className="mt-1 text-sm text-red-500">{doctorFormState.errors.password}</p>
-              ) : null}
-            </Field>
-            <Field label="Phone">
-              <input
-                className={getInputStateClasses(doctorFormState.errors.phone)}
-                name="phone"
-                onBlur={doctorFormState.handleBlur}
-                onChange={doctorFormState.handleChange}
-                type="text"
-                value={doctorForm.phone}
-              />
-              {doctorFormState.errors.phone ? (
-                <p className="mt-1 text-sm text-red-500">{doctorFormState.errors.phone}</p>
-              ) : null}
-            </Field>
-            <div className="md:col-span-2">
+              >
+                <input
+                  autoComplete="new-password"
+                  className={getInputStateClasses(doctorFormState.errors.password)}
+                  name="password"
+                  onBlur={doctorFormState.handleBlur}
+                  onChange={doctorFormState.handleChange}
+                  placeholder={
+                    doctorModal.doctor
+                      ? 'Enter new password only if you want to change it'
+                      : 'Set login password'
+                  }
+                  type="password"
+                  value={doctorForm.password}
+                />
+                {doctorFormState.errors.password ? (
+                  <p className="mt-1 text-sm text-red-500">{doctorFormState.errors.password}</p>
+                ) : null}
+              </Field>
+              <Field label="Phone">
+                <input
+                  autoComplete="tel"
+                  className={getInputStateClasses(doctorFormState.errors.phone)}
+                  name="phone"
+                  onBlur={doctorFormState.handleBlur}
+                  onChange={doctorFormState.handleChange}
+                  type="text"
+                  value={doctorForm.phone}
+                />
+                {doctorFormState.errors.phone ? (
+                  <p className="mt-1 text-sm text-red-500">{doctorFormState.errors.phone}</p>
+                ) : null}
+              </Field>
+            </div>
+          </section>
+
+          <div className="border-t border-slate-200" />
+
+          <section className="space-y-4">
+            <div>
               <p className="text-sm font-medium text-slate-700">Working days</p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {DAYS_OF_WEEK.map((day) => {
@@ -2600,68 +2613,63 @@ function AdminDashboard() {
                 })}
               </div>
             </div>
-            <Field label="Start time">
-              <input
-                className={inputClasses}
-                name="start_time"
-                onChange={(event) =>
-                  doctorFormState.handleChange(event)
-                }
-                type="time"
-                value={doctorForm.start_time}
-              />
-            </Field>
-            <Field label="End time">
-              <input
-                className={inputClasses}
-                name="end_time"
-                onChange={(event) =>
-                  doctorFormState.handleChange(event)
-                }
-                type="time"
-                value={doctorForm.end_time}
-              />
-            </Field>
-            <Field label="Slot duration (mins)">
-              <input
-                className={inputClasses}
-                min="5"
-                name="slot_duration_mins"
-                onChange={(event) =>
-                  doctorFormState.handleChange(event)
-                }
-                type="number"
-                value={doctorForm.slot_duration_mins}
-              />
-            </Field>
-            <Field label="Consultation duration (mins)">
-              <input
-                className={inputClasses}
-                min="5"
-                name="consultation_duration_mins"
-                onChange={(event) =>
-                  doctorFormState.handleChange(event)
-                }
-                type="number"
-                value={doctorForm.consultation_duration_mins}
-              />
-            </Field>
-            <Field label="Patient intake status">
-              <select
-                className={inputClasses}
-                onChange={(event) =>
-                  setDoctorForm((current) => ({
-                    ...current,
-                    accepting_patients: event.target.value === 'true',
-                  }))
-                }
-                value={doctorForm.accepting_patients ? 'true' : 'false'}
-              >
-                <option value="true">Accepting patients</option>
-                <option value="false">Not accepting patients</option>
-              </select>
-            </Field>
-          </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="Start time">
+                <input
+                  className={inputClasses}
+                  name="start_time"
+                  onChange={doctorFormState.handleChange}
+                  type="time"
+                  value={doctorForm.start_time}
+                />
+              </Field>
+              <Field label="End time">
+                <input
+                  className={inputClasses}
+                  name="end_time"
+                  onChange={doctorFormState.handleChange}
+                  type="time"
+                  value={doctorForm.end_time}
+                />
+              </Field>
+              <Field label="Slot duration (mins)">
+                <input
+                  className={inputClasses}
+                  min="5"
+                  name="slot_duration_mins"
+                  onChange={doctorFormState.handleChange}
+                  type="number"
+                  value={doctorForm.slot_duration_mins}
+                />
+              </Field>
+              <Field label="Consultation duration (mins)">
+                <input
+                  className={inputClasses}
+                  min="5"
+                  name="consultation_duration_mins"
+                  onChange={doctorFormState.handleChange}
+                  type="number"
+                  value={doctorForm.consultation_duration_mins}
+                />
+              </Field>
+              <Field label="Patient intake status">
+                <select
+                  className={inputClasses}
+                  onChange={(event) =>
+                    setDoctorForm((current) => ({
+                      ...current,
+                      accepting_patients: event.target.value === 'true',
+                    }))
+                  }
+                  value={doctorForm.accepting_patients ? 'true' : 'false'}
+                >
+                  <option value="true">Accepting patients</option>
+                  <option value="false">Not accepting patients</option>
+                </select>
+              </Field>
+            </div>
+          </section>
 
           <ErrorBanner
             message={
