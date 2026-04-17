@@ -108,6 +108,13 @@ export const persistAuth = ({ token, user, role }) => {
   const storedUser = user
     ? {
         id: user.id ?? user._id ?? user.user_id ?? user.patient_id ?? user.doctor_id ?? null,
+        _id: user._id ?? user.id ?? null,
+        email: user.email ?? '',
+        full_name: user.full_name ?? user.name ?? '',
+        role: user.role ?? user.user_role ?? normalizedRole,
+        doctor_id: user.doctor_id ?? null,
+        patient_id: user.patient_id ?? null,
+        receptionist_id: user.receptionist_id ?? null,
       }
     : null
 

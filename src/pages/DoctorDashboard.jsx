@@ -18,6 +18,7 @@ import {
   isPast,
   isToday,
 } from '../lib/datetime.js'
+import { coerceBoolean, normalizeDelimitedList } from '../lib/clinicData.js'
 import { getIntakeForm as fetchIntakeForm } from '../services/intake.js'
 import {
   getDoctorAppointments,
@@ -128,23 +129,36 @@ const normalizeDoctor = (doctor = {}) => ({
   specialty: firstValue(doctor.specialty, doctor.specialisation, 'General'),
   email: firstValue(doctor.email, ''),
   phone: firstValue(doctor.phone, ''),
-  working_days: Array.isArray(doctor.working_days)
-    ? doctor.working_days
-    : Array.isArray(doctor.workingDays)
-      ? doctor.workingDays
-      : typeof firstValue(doctor.working_days, doctor.workingDays) === 'string'
-        ? firstValue(doctor.working_days, doctor.workingDays)
-            .split(',')
-            .map((day) => day.trim())
-            .filter(Boolean)
-        : [],
+  working_days: normalizeDelimitedList(firstValue(doctor.working_days, doctor.workingDays)),
   start_time: firstValue(doctor.start_time, doctor.startTime, ''),
   end_time: firstValue(doctor.end_time, doctor.endTime, ''),
   slot_duration_mins: Number(
     firstValue(doctor.slot_duration_mins, doctor.slotDurationMins, 15),
   ),
-  is_active: Boolean(
+  consultation_duration_mins: Number(
+    firstValue(
+      doctor.consultation_duration_mins,
+      doctor.consultationDurationMins,
+      doctor.consultation_duration,
+      doctor.consultationDuration,
+      doctor.slot_duration_mins,
+      doctor.slotDurationMins,
+      15,
+    ),
+  ),
+  accepting_patients: coerceBoolean(
+    firstValue(
+      doctor.accepting_patients,
+      doctor.acceptingPatients,
+      doctor.is_accepting_patients,
+      doctor.isAcceptingPatients,
+      true,
+    ),
+    true,
+  ),
+  is_active: coerceBoolean(
     firstValue(doctor.is_active, doctor.active, doctor.status === 'active', true),
+    true,
   ),
 })
 
@@ -287,6 +301,8 @@ function DoctorDashboard() {
     start_time: '',
     end_time: '',
     slot_duration_mins: 15,
+    consultation_duration_mins: 15,
+    accepting_patients: true,
     is_active: true,
   })
 
@@ -421,6 +437,8 @@ function DoctorDashboard() {
       start_time: profile?.start_time || '',
       end_time: profile?.end_time || '',
       slot_duration_mins: profile?.slot_duration_mins || 15,
+      consultation_duration_mins: profile?.consultation_duration_mins || 15,
+      accepting_patients: profile?.accepting_patients ?? true,
       is_active: profile?.is_active ?? true,
     })
   }
@@ -856,6 +874,14 @@ function DoctorDashboard() {
         <p className="mt-1 text-base font-medium text-slate-900">
           {doctorProfile?.slot_duration_mins || 15} mins
         </p>
+        <p className="mt-4 text-sm text-slate-500">Consultation duration</p>
+        <p className="mt-1 text-base font-medium text-slate-900">
+          {doctorProfile?.consultation_duration_mins || doctorProfile?.slot_duration_mins || 15} mins
+        </p>
+        <p className="mt-4 text-sm text-slate-500">Accepting patients</p>
+        <p className="mt-1 text-base font-medium text-slate-900">
+          {doctorProfile?.accepting_patients ? 'Yes' : 'No'}
+        </p>
       </div>
 
       <div className={`${cardClasses} p-6`}>
@@ -890,6 +916,10 @@ function DoctorDashboard() {
                   start_time: availabilityForm.start_time,
                   end_time: availabilityForm.end_time,
                   slot_duration_mins: Number(availabilityForm.slot_duration_mins),
+                  consultation_duration_mins: Number(
+                    availabilityForm.consultation_duration_mins,
+                  ),
+                  accepting_patients: availabilityForm.accepting_patients,
                   is_active: availabilityForm.is_active,
                 },
               })
@@ -973,6 +1003,35 @@ function DoctorDashboard() {
                   type="number"
                   value={availabilityForm.slot_duration_mins}
                 />
+              </Field>
+              <Field label="Consultation duration (mins)">
+                <input
+                  className={inputClasses}
+                  min="5"
+                  onChange={(event) =>
+                    setAvailabilityForm((current) => ({
+                      ...current,
+                      consultation_duration_mins: event.target.value,
+                    }))
+                  }
+                  type="number"
+                  value={availabilityForm.consultation_duration_mins}
+                />
+              </Field>
+              <Field label="Patient intake status">
+                <select
+                  className={inputClasses}
+                  onChange={(event) =>
+                    setAvailabilityForm((current) => ({
+                      ...current,
+                      accepting_patients: event.target.value === 'true',
+                    }))
+                  }
+                  value={availabilityForm.accepting_patients ? 'true' : 'false'}
+                >
+                  <option value="true">Accepting patients</option>
+                  <option value="false">Not accepting patients</option>
+                </select>
               </Field>
               <Field label="Availability status">
                 <select

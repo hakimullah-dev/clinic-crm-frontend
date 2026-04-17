@@ -11,7 +11,15 @@ import SharedEmptyState from '../components/ui/EmptyState.jsx'
 import SharedLoadingSpinner from '../components/ui/LoadingSpinner.jsx'
 import Pagination from '../components/ui/Pagination.jsx'
 import { clearStoredAuth, getStoredUser } from '../lib/auth.js'
-import { formatDate, formatDateTime, formatTime, getSydneyToday, isToday } from '../lib/datetime.js'
+import {
+  combineDateAndTime,
+  formatDate,
+  formatDateTime,
+  formatTime,
+  getSydneyToday,
+  isToday,
+} from '../lib/datetime.js'
+import { coerceBoolean, normalizeSlotOptions } from '../lib/clinicData.js'
 import { useForm } from '../lib/useForm.js'
 import { isEmail, isPhone, minLength, required } from '../lib/validators.js'
 import {
@@ -62,6 +70,8 @@ const QUICK_BOOK_FORM_INITIAL_VALUES = {
   email: '',
   gender: '',
   date_of_birth: '',
+  allergies: '',
+  medical_notes: '',
   doctor_id: '',
   date: '',
   time: '',
@@ -74,6 +84,8 @@ const WAITLIST_FORM_INITIAL_VALUES = {
   email: '',
   gender: '',
   date_of_birth: '',
+  allergies: '',
+  medical_notes: '',
   doctor_id: '',
   preferred_date: '',
 }
@@ -81,6 +93,10 @@ const PATIENT_EDIT_FORM_INITIAL_VALUES = {
   full_name: '',
   phone: '',
   email: '',
+  gender: '',
+  date_of_birth: '',
+  allergies: '',
+  medical_notes: '',
 }
 const PATIENT_VALIDATION_RULES = {
   full_name: [required, (value) => minLength(value, 2)],
@@ -127,6 +143,8 @@ const normalizePatient = (patient = {}) => ({
   email: firstValue(patient.email, ''),
   gender: firstValue(patient.gender, ''),
   date_of_birth: firstValue(patient.date_of_birth, patient.dob, ''),
+  allergies: firstValue(patient.allergies, ''),
+  medical_notes: firstValue(patient.medical_notes, patient.notes, ''),
   created_at: firstValue(patient.created_at, patient.createdAt, ''),
 })
 
@@ -136,6 +154,16 @@ const normalizeDoctor = (doctor = {}) => ({
   specialty: firstValue(doctor.specialty, doctor.specialisation, 'General'),
   slot_duration_mins: Number(
     firstValue(doctor.slot_duration_mins, doctor.slotDurationMins, 15),
+  ),
+  accepting_patients: coerceBoolean(
+    firstValue(
+      doctor.accepting_patients,
+      doctor.acceptingPatients,
+      doctor.is_accepting_patients,
+      doctor.isAcceptingPatients,
+      true,
+    ),
+    true,
   ),
 })
 
@@ -375,12 +403,6 @@ function ReceptionistDashboard() {
       typeof updater === 'function' ? updater(waitlistFormState.values) : updater
     waitlistFormState.setValues(nextValues)
   }
-  const setPatientEditForm = (updater) => {
-    const nextValues =
-      typeof updater === 'function' ? updater(patientEditFormState.values) : updater
-    patientEditFormState.setValues(nextValues)
-  }
-
   const doctorsQuery = useQuery({
     queryKey: ['doctors'],
     queryFn: async () => getDoctors(await fetchDoctors()),
@@ -425,13 +447,15 @@ function ReceptionistDashboard() {
 
   const quickSlotsQuery = useQuery({
     queryKey: ['appointments', 'slots', 'quick-book', quickBookForm.doctor_id, quickBookForm.date],
-    queryFn: async () => ensureArray(await fetchSlots(quickBookForm.doctor_id, quickBookForm.date), ['slots', 'data']),
+    queryFn: async () =>
+      normalizeSlotOptions(await fetchSlots(quickBookForm.doctor_id, quickBookForm.date)),
     enabled: activeSection === 'book' && Boolean(quickBookForm.doctor_id && quickBookForm.date),
   })
 
   const rescheduleSlotsQuery = useQuery({
     queryKey: ['appointments', 'slots', 'reschedule', checkInReschedule?.doctor_id, rescheduleForm.date],
-    queryFn: async () => ensureArray(await fetchSlots(checkInReschedule.doctor_id, rescheduleForm.date), ['slots', 'data']),
+    queryFn: async () =>
+      normalizeSlotOptions(await fetchSlots(checkInReschedule.doctor_id, rescheduleForm.date)),
     enabled: Boolean(checkInReschedule?.doctor_id && rescheduleForm.date),
   })
 
@@ -512,6 +536,8 @@ function ReceptionistDashboard() {
     email: quickBookForm.email,
     gender: quickBookForm.gender,
     date_of_birth: quickBookForm.date_of_birth,
+    allergies: quickBookForm.allergies,
+    medical_notes: quickBookForm.medical_notes,
   }
 
   const waitlistBookingPatient = waitlistLookupPatient || {
@@ -521,14 +547,12 @@ function ReceptionistDashboard() {
     email: waitlistForm.email,
     gender: waitlistForm.gender,
     date_of_birth: waitlistForm.date_of_birth,
+    allergies: waitlistForm.allergies,
+    medical_notes: waitlistForm.medical_notes,
   }
 
-  const sortedTodayAppointments = useMemo(
-    () =>
-      [...todayAppointments].sort(
-        (a, b) => new Date(a.date_time).getTime() - new Date(b.date_time).getTime(),
-      ),
-    [todayAppointments],
+  const sortedTodayAppointments = [...todayAppointments].sort(
+    (a, b) => new Date(a.date_time).getTime() - new Date(b.date_time).getTime(),
   )
 
   const paginatedTodayAppointments = sortedTodayAppointments
@@ -715,6 +739,8 @@ function ReceptionistDashboard() {
                   email: '',
                   gender: '',
                   date_of_birth: '',
+                  allergies: '',
+                  medical_notes: '',
                 }))
               }
               placeholder="0300 0000000"
@@ -794,6 +820,32 @@ function ReceptionistDashboard() {
                     value={quickBookForm.date_of_birth}
                   />
                 </Field>
+                <Field label="Allergies (optional)">
+                  <textarea
+                    className={inputClasses}
+                    onChange={(event) =>
+                      setQuickBookForm((current) => ({
+                        ...current,
+                        allergies: event.target.value,
+                      }))
+                    }
+                    rows="3"
+                    value={quickBookForm.allergies}
+                  />
+                </Field>
+                <Field label="Medical notes (optional)">
+                  <textarea
+                    className={inputClasses}
+                    onChange={(event) =>
+                      setQuickBookForm((current) => ({
+                        ...current,
+                        medical_notes: event.target.value,
+                      }))
+                    }
+                    rows="3"
+                    value={quickBookForm.medical_notes}
+                  />
+                </Field>
               </div>
 
               <div className="flex justify-end">
@@ -818,6 +870,8 @@ function ReceptionistDashboard() {
                       email: quickBookForm.email,
                       gender: quickBookForm.gender,
                       date_of_birth: quickBookForm.date_of_birth,
+                      allergies: quickBookForm.allergies || undefined,
+                      medical_notes: quickBookForm.medical_notes || undefined,
                     })
 
                     setQuickBookForm((current) => ({
@@ -827,6 +881,8 @@ function ReceptionistDashboard() {
                       email: created.email,
                       gender: created.gender,
                       date_of_birth: created.date_of_birth,
+                      allergies: created.allergies || '',
+                      medical_notes: created.medical_notes || '',
                     }))
                   }}
                   type="button"
@@ -859,8 +915,13 @@ function ReceptionistDashboard() {
               >
                 <option value="">Select doctor</option>
                 {doctors.map((doctor) => (
-                  <option key={doctor.id} value={doctor.id}>
+                  <option
+                    key={doctor.id}
+                    disabled={!doctor.accepting_patients}
+                    value={doctor.id}
+                  >
                     {doctor.full_name}
+                    {doctor.accepting_patients ? '' : ' (Not accepting patients)'}
                   </option>
                 ))}
               </select>
@@ -959,7 +1020,7 @@ function ReceptionistDashboard() {
                 await createAppointmentMutation.mutateAsync({
                   patient_id: quickBookingPatient.id,
                   doctor_id: quickBookForm.doctor_id,
-                  scheduled_at: `${quickBookForm.date}T${quickBookForm.time}`,
+                  scheduled_at: combineDateAndTime(quickBookForm.date, quickBookForm.time),
                   booking_source: 'receptionist',
                   notes: quickBookForm.notes || undefined,
                 })
@@ -969,7 +1030,7 @@ function ReceptionistDashboard() {
                   doctor_name:
                     doctors.find((doctor) => String(doctor.id) === String(quickBookForm.doctor_id))
                       ?.full_name || 'Doctor',
-                  scheduled_at: `${quickBookForm.date}T${quickBookForm.time}`,
+                  scheduled_at: combineDateAndTime(quickBookForm.date, quickBookForm.time),
                 })
               }}
               type="button"
@@ -1117,6 +1178,8 @@ function ReceptionistDashboard() {
                   <th className="pb-3 pr-4 font-medium">Name</th>
                   <th className="pb-3 pr-4 font-medium">Phone</th>
                   <th className="pb-3 pr-4 font-medium">Email</th>
+                  <th className="pb-3 pr-4 font-medium">Gender</th>
+                  <th className="pb-3 pr-4 font-medium">DOB</th>
                   <th className="pb-3 pr-4 font-medium">Created</th>
                   <th className="pb-3 font-medium">Action</th>
                 </tr>
@@ -1127,6 +1190,8 @@ function ReceptionistDashboard() {
                     <td className="py-4 pr-4 font-medium text-slate-900">{patient.full_name}</td>
                     <td className="py-4 pr-4 text-slate-600">{patient.phone || 'N/A'}</td>
                     <td className="py-4 pr-4 text-slate-600">{patient.email || 'N/A'}</td>
+                    <td className="py-4 pr-4 text-slate-600">{patient.gender || 'N/A'}</td>
+                    <td className="py-4 pr-4 text-slate-600">{formatDate(patient.date_of_birth)}</td>
                     <td className="py-4 pr-4 text-slate-600">{formatDate(patient.created_at)}</td>
                     <td className="py-4">
                       <button
@@ -1137,6 +1202,10 @@ function ReceptionistDashboard() {
                             full_name: patient.full_name || '',
                             phone: patient.phone || '',
                             email: patient.email || '',
+                            gender: patient.gender || '',
+                            date_of_birth: patient.date_of_birth || '',
+                            allergies: patient.allergies || '',
+                            medical_notes: patient.medical_notes || '',
                           })
                         }}
                         type="button"
@@ -1352,7 +1421,7 @@ function ReceptionistDashboard() {
                 rescheduleMutation.mutate({
                   id: checkInReschedule.id,
                   status: 'confirmed',
-                  scheduled_at: `${rescheduleForm.date}T${rescheduleForm.time}`,
+                  scheduled_at: combineDateAndTime(rescheduleForm.date, rescheduleForm.time),
                 })
               }
               type="button"
@@ -1389,6 +1458,8 @@ function ReceptionistDashboard() {
                     email: '',
                     gender: '',
                     date_of_birth: '',
+                    allergies: '',
+                    medical_notes: '',
                   }))
                 }
                 placeholder="0300 0000000"
@@ -1477,6 +1548,32 @@ function ReceptionistDashboard() {
                       value={waitlistForm.date_of_birth}
                     />
                   </Field>
+                  <Field label="Allergies (optional)">
+                    <textarea
+                      className={inputClasses}
+                      onChange={(event) =>
+                        setWaitlistForm((current) => ({
+                          ...current,
+                          allergies: event.target.value,
+                        }))
+                      }
+                      rows="3"
+                      value={waitlistForm.allergies}
+                    />
+                  </Field>
+                  <Field label="Medical notes (optional)">
+                    <textarea
+                      className={inputClasses}
+                      onChange={(event) =>
+                        setWaitlistForm((current) => ({
+                          ...current,
+                          medical_notes: event.target.value,
+                        }))
+                      }
+                      rows="3"
+                      value={waitlistForm.medical_notes}
+                    />
+                  </Field>
                 </div>
 
                 <div className="flex justify-end">
@@ -1501,6 +1598,8 @@ function ReceptionistDashboard() {
                         email: waitlistForm.email,
                         gender: waitlistForm.gender,
                         date_of_birth: waitlistForm.date_of_birth,
+                        allergies: waitlistForm.allergies || undefined,
+                        medical_notes: waitlistForm.medical_notes || undefined,
                       })
 
                       setWaitlistForm((current) => ({
@@ -1510,6 +1609,8 @@ function ReceptionistDashboard() {
                         email: created.email,
                         gender: created.gender,
                         date_of_birth: created.date_of_birth,
+                        allergies: created.allergies || '',
+                        medical_notes: created.medical_notes || '',
                       }))
                     }}
                     type="button"
@@ -1634,6 +1735,18 @@ function ReceptionistDashboard() {
                   <span className="font-medium text-slate-900">Gender:</span> {selectedPatient.gender || 'N/A'}
                 </p>
                 <p>
+                  <span className="font-medium text-slate-900">Date of birth:</span>{' '}
+                  {formatDate(selectedPatient.date_of_birth)}
+                </p>
+                <p className="md:col-span-2">
+                  <span className="font-medium text-slate-900">Allergies:</span>{' '}
+                  {selectedPatient.allergies || 'None recorded'}
+                </p>
+                <p className="md:col-span-2">
+                  <span className="font-medium text-slate-900">Medical notes:</span>{' '}
+                  {selectedPatient.medical_notes || 'No notes yet'}
+                </p>
+                <p>
                   <span className="font-medium text-slate-900">Created:</span>{' '}
                   {formatDate(selectedPatient.created_at)}
                 </p>
@@ -1721,6 +1834,46 @@ function ReceptionistDashboard() {
                 {patientEditFormState.errors.email ? (
                   <p className="mt-1 text-sm text-red-500">{patientEditFormState.errors.email}</p>
                 ) : null}
+              </Field>
+              <Field label="Gender">
+                <select
+                  className={inputClasses}
+                  name="gender"
+                  onChange={patientEditFormState.handleChange}
+                  value={patientEditForm.gender}
+                >
+                  <option value="">Select gender</option>
+                  <option value="male">Male</option>
+                  <option value="female">Female</option>
+                  <option value="other">Other</option>
+                </select>
+              </Field>
+              <Field label="Date of birth">
+                <input
+                  className={inputClasses}
+                  name="date_of_birth"
+                  onChange={patientEditFormState.handleChange}
+                  type="date"
+                  value={patientEditForm.date_of_birth}
+                />
+              </Field>
+              <Field label="Allergies (optional)">
+                <textarea
+                  className={inputClasses}
+                  name="allergies"
+                  onChange={patientEditFormState.handleChange}
+                  rows="3"
+                  value={patientEditForm.allergies}
+                />
+              </Field>
+              <Field label="Medical notes (optional)">
+                <textarea
+                  className={inputClasses}
+                  name="medical_notes"
+                  onChange={patientEditFormState.handleChange}
+                  rows="3"
+                  value={patientEditForm.medical_notes}
+                />
               </Field>
             </div>
 

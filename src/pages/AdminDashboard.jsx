@@ -12,13 +12,19 @@ import SharedEmptyState from '../components/ui/EmptyState.jsx'
 import SharedLoadingSpinner from '../components/ui/LoadingSpinner.jsx'
 import Pagination from '../components/ui/Pagination.jsx'
 import { clearStoredAuth, getStoredUser } from '../lib/auth.js'
-import { formatDate, formatDateTime, formatTime, getSydneyToday } from '../lib/datetime.js'
+import {
+  combineDateAndTime,
+  formatDate,
+  formatDateTime,
+  formatTime,
+  getSydneyToday,
+} from '../lib/datetime.js'
+import { coerceBoolean, normalizeDelimitedList, normalizeSlotOptions } from '../lib/clinicData.js'
 import { useForm } from '../lib/useForm.js'
 import { isEmail, isPhone, minLength, required } from '../lib/validators.js'
 import { registerUser } from '../services/auth.js'
 import { getDoctorFeedbackStats, getFeedback as fetchFeedback } from '../services/feedback.js'
 import {
-  cancelAppointment as cancelAppointmentService,
   createAppointment as createAppointmentService,
   getAppointments as fetchAppointments,
   getPatientAppointments as fetchPatientAppointments,
@@ -112,6 +118,8 @@ const DOCTOR_FORM_INITIAL_VALUES = {
   start_time: '',
   end_time: '',
   slot_duration_mins: 15,
+  consultation_duration_mins: 15,
+  accepting_patients: true,
 }
 const PATIENT_CREATE_VALIDATION_RULES = {
   full_name: [required, (value) => minLength(value, 2)],
@@ -129,16 +137,6 @@ const getInputStateClasses = (error) =>
   error
     ? `${inputClasses} border-red-500 focus:border-red-500 focus:ring-red-100`
     : inputClasses
-
-const safeJsonParse = (value) => {
-  if (!value) return null
-
-  try {
-    return JSON.parse(value)
-  } catch {
-    return null
-  }
-}
 
 const ensureArray = (value, keys = []) => {
   if (Array.isArray(value)) return value
@@ -173,23 +171,36 @@ const normalizeDoctor = (doctor = {}) => ({
   specialty: firstValue(doctor.specialty, doctor.specialisation, 'General'),
   email: firstValue(doctor.email, ''),
   phone: firstValue(doctor.phone, ''),
-  working_days: Array.isArray(doctor.working_days)
-    ? doctor.working_days
-    : Array.isArray(doctor.workingDays)
-      ? doctor.workingDays
-      : typeof firstValue(doctor.working_days, doctor.workingDays) === 'string'
-        ? firstValue(doctor.working_days, doctor.workingDays)
-            .split(',')
-            .map((day) => day.trim())
-            .filter(Boolean)
-        : [],
+  working_days: normalizeDelimitedList(firstValue(doctor.working_days, doctor.workingDays)),
   start_time: firstValue(doctor.start_time, doctor.startTime, ''),
   end_time: firstValue(doctor.end_time, doctor.endTime, ''),
   slot_duration_mins: Number(
     firstValue(doctor.slot_duration_mins, doctor.slotDurationMins, 15),
   ),
-  is_active: Boolean(
+  consultation_duration_mins: Number(
+    firstValue(
+      doctor.consultation_duration_mins,
+      doctor.consultationDurationMins,
+      doctor.consultation_duration,
+      doctor.consultationDuration,
+      doctor.slot_duration_mins,
+      doctor.slotDurationMins,
+      15,
+    ),
+  ),
+  accepting_patients: coerceBoolean(
+    firstValue(
+      doctor.accepting_patients,
+      doctor.acceptingPatients,
+      doctor.is_accepting_patients,
+      doctor.isAcceptingPatients,
+      true,
+    ),
+    true,
+  ),
+  is_active: coerceBoolean(
     firstValue(doctor.is_active, doctor.active, doctor.status === 'active', true),
+    true,
   ),
 })
 
@@ -542,16 +553,6 @@ function AdminDashboard() {
   const patientForm = patientFormState.values
   const patientEditForm = patientEditFormState.values
   const doctorForm = doctorFormState.values
-  const setPatientForm = (updater) => {
-    const nextValues =
-      typeof updater === 'function' ? updater(patientFormState.values) : updater
-    patientFormState.setValues(nextValues)
-  }
-  const setPatientEditForm = (updater) => {
-    const nextValues =
-      typeof updater === 'function' ? updater(patientEditFormState.values) : updater
-    patientEditFormState.setValues(nextValues)
-  }
   const setDoctorForm = (updater) => {
     const nextValues =
       typeof updater === 'function' ? updater(doctorFormState.values) : updater
@@ -642,7 +643,8 @@ function AdminDashboard() {
 
   const slotsQuery = useQuery({
     queryKey: ['appointments', 'slots', appointmentForm.doctor_id, appointmentForm.date],
-    queryFn: async () => ensureArray(await fetchSlots(appointmentForm.doctor_id, appointmentForm.date), ['slots', 'data']),
+    queryFn: async () =>
+      normalizeSlotOptions(await fetchSlots(appointmentForm.doctor_id, appointmentForm.date)),
     enabled: newAppointmentOpen && Boolean(appointmentForm.doctor_id && appointmentForm.date),
   })
 
@@ -680,7 +682,7 @@ function AdminDashboard() {
   const createPatientMutation = useMutation({
     mutationFn: createPatientService,
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['patients'] })
+      await invalidateCoreData()
       setAddPatientOpen(false)
       patientFormState.reset(PATIENT_FORM_INITIAL_VALUES)
     },
@@ -689,7 +691,7 @@ function AdminDashboard() {
   const updatePatientMutation = useMutation({
     mutationFn: ({ id, payload }) => updatePatientService(id, payload),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ['patients'] })
+      await invalidateCoreData()
       if (selectedPatient?.id) {
         await queryClient.invalidateQueries({
           queryKey: ['appointments', 'patient', selectedPatient.id],
@@ -805,7 +807,6 @@ function AdminDashboard() {
   const waitlistLookupPatient = waitlistPatientLookupQuery.data || null
   const appointmentsTotal = getTotalCount(appointmentsPayload, appointments.length)
   const patientsTotal = getTotalCount(patientsPayload, patients.length)
-  const waitlistTotal = getTotalCount(waitlistPayload, waitlist.length)
 
   const todaySummary = {
     totalAppointments: firstValue(
@@ -940,6 +941,29 @@ function AdminDashboard() {
     [feedbackPage, filteredFeedbackEntries],
   )
 
+  function openDoctorModal(doctor = null) {
+    doctorFormState.reset(
+      doctor
+        ? {
+            full_name: doctor.full_name || '',
+            specialty: doctor.specialty || '',
+            email: doctor.email || '',
+            password: '',
+            phone: doctor.phone || '',
+            working_days: doctor.working_days || [],
+            start_time: doctor.start_time || '',
+            end_time: doctor.end_time || '',
+            slot_duration_mins: doctor.slot_duration_mins || 15,
+            consultation_duration_mins: doctor.consultation_duration_mins || 15,
+            accepting_patients: doctor.accepting_patients ?? true,
+          }
+        : {
+            ...DOCTOR_FORM_INITIAL_VALUES,
+          },
+    )
+    setDoctorModal({ open: true, doctor })
+  }
+
   useEffect(() => {
     const section = searchParams.get('section')
     if (section) {
@@ -984,27 +1008,6 @@ function AdminDashboard() {
   const handleLogout = () => {
     clearStoredAuth()
     navigate('/login', { replace: true })
-  }
-
-  const openDoctorModal = (doctor = null) => {
-    doctorFormState.reset(
-      doctor
-        ? {
-            full_name: doctor.full_name || '',
-            specialty: doctor.specialty || '',
-            email: doctor.email || '',
-            password: '',
-            phone: doctor.phone || '',
-            working_days: doctor.working_days || [],
-            start_time: doctor.start_time || '',
-            end_time: doctor.end_time || '',
-            slot_duration_mins: doctor.slot_duration_mins || 15,
-          }
-        : {
-            ...DOCTOR_FORM_INITIAL_VALUES,
-          },
-    )
-    setDoctorModal({ open: true, doctor })
   }
 
   const renderReceptionistUserForm = () => (
@@ -1091,7 +1094,9 @@ function AdminDashboard() {
         <div className="md:col-span-2">
           {createReceptionistMutation.isSuccess ? (
             <div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-              Receptionist account created successfully.
+              {createReceptionistMutation.data?.existing
+                ? 'Receptionist already exists. Existing account was recognized successfully.'
+                : 'Receptionist account created successfully.'}
             </div>
           ) : null}
 
@@ -1503,6 +1508,11 @@ function AdminDashboard() {
             </table>
           </div>
         )}
+        <Pagination
+          page={patientsPage}
+          totalPages={Math.max(1, Math.ceil(patientsTotal / PAGE_SIZE))}
+          onPageChange={setPatientsPage}
+        />
       </div>
     </SectionShell>
   )
@@ -1611,6 +1621,14 @@ function AdminDashboard() {
                 <div>
                   <dt className="font-medium text-slate-800">Slot duration</dt>
                   <dd className="mt-1">{doctor.slot_duration_mins} mins</dd>
+                </div>
+                <div>
+                  <dt className="font-medium text-slate-800">Consultation duration</dt>
+                  <dd className="mt-1">{doctor.consultation_duration_mins} mins</dd>
+                </div>
+                <div>
+                  <dt className="font-medium text-slate-800">Accepting patients</dt>
+                  <dd className="mt-1">{doctor.accepting_patients ? 'Yes' : 'No'}</dd>
                 </div>
               </dl>
               <div className="mt-5 flex flex-wrap gap-2">
@@ -2153,8 +2171,8 @@ function AdminDashboard() {
             createAppointmentMutation.mutate({
               patient_id: appointmentLookupPatient?.id,
               doctor_id: appointmentForm.doctor_id,
-              date: appointmentForm.date,
-              time: appointmentForm.time,
+              scheduled_at: combineDateAndTime(appointmentForm.date, appointmentForm.time),
+              booking_source: 'admin',
             })
           }}
         >
@@ -2195,8 +2213,13 @@ function AdminDashboard() {
               >
                 <option value="">Select doctor</option>
                 {doctors.map((doctor) => (
-                  <option key={doctor.id} value={doctor.id}>
+                  <option
+                    key={doctor.id}
+                    disabled={!doctor.accepting_patients}
+                    value={doctor.id}
+                  >
                     {doctor.full_name}
+                    {doctor.accepting_patients ? '' : ' (Not accepting patients)'}
                   </option>
                 ))}
               </select>
@@ -2449,7 +2472,10 @@ function AdminDashboard() {
           onSubmit={doctorFormState.handleSubmit((values) => {
             const payload = {
               ...values,
+              working_days: values.working_days,
               slot_duration_mins: Number(values.slot_duration_mins),
+              consultation_duration_mins: Number(values.consultation_duration_mins),
+              accepting_patients: Boolean(values.accepting_patients),
             }
 
             if (!values.password) {
@@ -2607,6 +2633,33 @@ function AdminDashboard() {
                 type="number"
                 value={doctorForm.slot_duration_mins}
               />
+            </Field>
+            <Field label="Consultation duration (mins)">
+              <input
+                className={inputClasses}
+                min="5"
+                name="consultation_duration_mins"
+                onChange={(event) =>
+                  doctorFormState.handleChange(event)
+                }
+                type="number"
+                value={doctorForm.consultation_duration_mins}
+              />
+            </Field>
+            <Field label="Patient intake status">
+              <select
+                className={inputClasses}
+                onChange={(event) =>
+                  setDoctorForm((current) => ({
+                    ...current,
+                    accepting_patients: event.target.value === 'true',
+                  }))
+                }
+                value={doctorForm.accepting_patients ? 'true' : 'false'}
+              >
+                <option value="true">Accepting patients</option>
+                <option value="false">Not accepting patients</option>
+              </select>
             </Field>
           </div>
 
@@ -2817,6 +2870,14 @@ function AdminDashboard() {
                   id: selectedPatient.id,
                   payload: patientEditForm,
                 })
+                setSelectedPatient((current) =>
+                  current
+                    ? {
+                        ...current,
+                        ...patientEditForm,
+                      }
+                    : current,
+                )
               })}
             >
               <h4 className="text-base font-semibold text-slate-900">Edit Patient</h4>
@@ -2970,438 +3031,3 @@ function AdminDashboard() {
 }
 
 export default AdminDashboard
-        <Pagination
-          page={patientsPage}
-          totalPages={Math.max(1, Math.ceil(patientsTotal / PAGE_SIZE))}
-          onPageChange={setPatientsPage}
-        />
-      </div>
-    </SectionShell>
-  )
-
-  const renderDoctors = () => (
-    <SectionShell
-      action={
-        <button
-          className="rounded-2xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-700"
-          onClick={() => openDoctorModal()}
-          type="button"
-        >
-          Add Doctor
-        </button>
-      }
-      description="Track provider availability, schedule settings, and account status."
-      title="Doctors"
-    >
-      <div className="mb-6 grid gap-4 md:grid-cols-4">
-        <Field label="Search">
-          <input
-            className={inputClasses}
-            onChange={(event) =>
-              setDoctorFilters((current) => ({ ...current, search: event.target.value }))
-            }
-            placeholder="Name, specialty, or email"
-            type="text"
-            value={doctorFilters.search}
-          />
-        </Field>
-        <Field label="Specialty">
-          <select
-            className={inputClasses}
-            onChange={(event) =>
-              setDoctorFilters((current) => ({ ...current, specialty: event.target.value }))
-            }
-            value={doctorFilters.specialty}
-          >
-            <option value="">All specialties</option>
-            {doctorSpecialties.map((specialty) => (
-              <option key={specialty} value={specialty}>
-                {specialty}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Status">
-          <select
-            className={inputClasses}
-            onChange={(event) =>
-              setDoctorFilters((current) => ({ ...current, status: event.target.value }))
-            }
-            value={doctorFilters.status}
-          >
-            <option value="">All statuses</option>
-            <option value="active">Active</option>
-            <option value="inactive">Inactive</option>
-          </select>
-        </Field>
-        <Field label="Working day">
-          <select
-            className={inputClasses}
-            onChange={(event) =>
-              setDoctorFilters((current) => ({ ...current, day: event.target.value }))
-            }
-            value={doctorFilters.day}
-          >
-            <option value="">Any day</option>
-            {DAYS_OF_WEEK.map((day) => (
-              <option key={day} value={day}>
-                {day}
-              </option>
-            ))}
-          </select>
-        </Field>
-      </div>
-
-      {doctorsQuery.isLoading ? (
-        <SharedLoadingSpinner size="md" />
-      ) : doctorsQuery.isError ? (
-        <ErrorBanner message={getErrorMessage(doctorsQuery.error, 'Failed to load doctors.')} />
-      ) : filteredDoctors.length === 0 ? (
-        <SharedEmptyState message="No doctors are configured yet." title="No Doctors" />
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {paginatedDoctors.map((doctor) => (
-            <article key={doctor.id} className="rounded-3xl border border-slate-200 bg-slate-50 p-5">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-lg font-semibold text-slate-900">{doctor.full_name}</h3>
-                  <p className="mt-1 text-sm text-slate-500">{doctor.specialty}</p>
-                </div>
-                <StatusBadge status={doctor.is_active ? 'active' : 'inactive'} />
-              </div>
-              <dl className="mt-5 space-y-3 text-sm text-slate-600">
-                <div>
-                  <dt className="font-medium text-slate-800">Working days</dt>
-                  <dd className="mt-1">{doctor.working_days.join(', ') || 'Not set'}</dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-800">Hours</dt>
-                  <dd className="mt-1">
-                    {doctor.start_time || 'N/A'} to {doctor.end_time || 'N/A'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="font-medium text-slate-800">Slot duration</dt>
-                  <dd className="mt-1">{doctor.slot_duration_mins} mins</dd>
-                </div>
-              </dl>
-              <div className="mt-5 flex flex-wrap gap-2">
-                <button
-                  className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-cyan-700"
-                  onClick={() => openDoctorModal(doctor)}
-                  type="button"
-                >
-                  Edit
-                </button>
-                <button
-                  className="rounded-xl bg-slate-100 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-200"
-                  onClick={() =>
-                    toggleDoctorMutation.mutate({
-                      id: doctor.id,
-                      is_active: !doctor.is_active,
-                    })
-                  }
-                  type="button"
-                >
-                  {doctor.is_active ? 'Deactivate' : 'Activate'}
-                </button>
-                <button
-                  className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
-                  onClick={() => setDoctorDeleteTarget(doctor)}
-                  type="button"
-                >
-                  Delete
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      )}
-      <Pagination
-        page={doctorsPage}
-        totalPages={Math.max(1, Math.ceil(filteredDoctors.length / PAGE_SIZE))}
-        onPageChange={setDoctorsPage}
-      />
-      <div className="mt-4">
-        <ErrorBanner
-          message={
-            toggleDoctorMutation.isError
-              ? getErrorMessage(toggleDoctorMutation.error, 'Unable to update doctor status.')
-              : deleteDoctorMutation.isError
-                ? getErrorMessage(deleteDoctorMutation.error, 'Unable to delete doctor.')
-              : ''
-          }
-        />
-      </div>
-    </SectionShell>
-  )
-
-  const renderWaitlist = () => (
-    <SectionShell
-      action={
-        <button
-          className="rounded-2xl bg-cyan-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-cyan-700"
-          onClick={() => setWaitlistModalOpen(true)}
-          type="button"
-        >
-          Add to Waitlist
-        </button>
-      }
-      description="Offer newly opened slots and manage pending demand."
-      title="Waitlist"
-    >
-      <div className="mb-6 grid gap-4 md:grid-cols-3">
-        <Field label="Doctor">
-          <select
-            className={inputClasses}
-            onChange={(event) =>
-              setWaitlistFilters((current) => ({ ...current, doctor_id: event.target.value }))
-            }
-            value={waitlistFilters.doctor_id}
-          >
-            <option value="">All doctors</option>
-            {doctors.map((doctor) => (
-              <option key={doctor.id} value={doctor.id}>
-                {doctor.full_name}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Status">
-          <select
-            className={inputClasses}
-            onChange={(event) =>
-              setWaitlistFilters((current) => ({ ...current, status: event.target.value }))
-            }
-            value={waitlistFilters.status}
-          >
-            <option value="">All statuses</option>
-            <option value="active">Active</option>
-            <option value="offered">Offered</option>
-            <option value="expired">Expired</option>
-          </select>
-        </Field>
-        <Field label="Requested date">
-          <input
-            className={inputClasses}
-            onChange={(event) =>
-              setWaitlistFilters((current) => ({
-                ...current,
-                requested_date: event.target.value,
-              }))
-            }
-            type="date"
-            value={waitlistFilters.requested_date}
-          />
-        </Field>
-      </div>
-
-      {waitlistQuery.isLoading ? (
-        <SharedLoadingSpinner size="md" />
-      ) : waitlistQuery.isError ? (
-        <ErrorBanner message={getErrorMessage(waitlistQuery.error, 'Failed to load waitlist.')} />
-      ) : filteredWaitlist.length === 0 ? (
-        <SharedEmptyState
-          message="No one is currently on the waitlist."
-          title="No Waitlist Entries"
-        />
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="min-w-full text-sm">
-            <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-[0.18em] text-slate-500">
-              <tr>
-                <th className="pb-3 pr-4 font-medium">Patient</th>
-                <th className="pb-3 pr-4 font-medium">Doctor</th>
-                <th className="pb-3 pr-4 font-medium">Requested date</th>
-                <th className="pb-3 pr-4 font-medium">Added at</th>
-                <th className="pb-3 pr-4 font-medium">Status</th>
-                <th className="pb-3 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {paginatedWaitlist.map((item) => (
-                <tr key={item.id} className="border-b border-slate-100">
-                  <td className="py-4 pr-4 font-medium text-slate-900">{item.patient_name}</td>
-                  <td className="py-4 pr-4 text-slate-600">{item.doctor_name}</td>
-                  <td className="py-4 pr-4 text-slate-600">{formatDate(item.requested_date)}</td>
-                  <td className="py-4 pr-4 text-slate-600">{formatDateTime(item.added_at)}</td>
-                  <td className="py-4 pr-4">
-                    <StatusBadge status={item.status} />
-                  </td>
-                  <td className="py-4">
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        className="rounded-xl bg-cyan-50 px-3 py-2 text-xs font-semibold text-cyan-700 transition hover:bg-cyan-100"
-                        onClick={() =>
-                          updateWaitlistStatusMutation.mutate({
-                            id: item.id,
-                            status: 'offered',
-                          })
-                        }
-                        type="button"
-                      >
-                        Offer Slot
-                      </button>
-                      <button
-                        className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
-                        onClick={() =>
-                          updateWaitlistStatusMutation.mutate({
-                            id: item.id,
-                            status: 'expired',
-                          })
-                        }
-                        type="button"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      <Pagination
-        page={waitlistPage}
-        totalPages={Math.max(1, Math.ceil(waitlistTotal / PAGE_SIZE))}
-        onPageChange={setWaitlistPage}
-      />
-      <div className="mt-4">
-        <ErrorBanner
-          message={
-            updateWaitlistStatusMutation.isError
-              ? getErrorMessage(
-                  updateWaitlistStatusMutation.error,
-                  'Unable to update waitlist entry.',
-                )
-              : ''
-          }
-        />
-      </div>
-    </SectionShell>
-  )
-
-  const renderFeedback = () => (
-    <div className="space-y-6">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        {feedbackStatsQuery.isLoading ? (
-          <p className="text-sm text-slate-500">Loading...</p>
-        ) : feedbackStatsQuery.isError ? (
-          <ErrorBanner
-            message={getErrorMessage(feedbackStatsQuery.error, 'Failed to load doctor ratings.')}
-          />
-        ) : feedbackStats.length === 0 ? (
-          <EmptyState message="No feedback summaries are available yet." />
-        ) : (
-          feedbackStats.map((stat, index) => {
-            const doctorName = firstValue(stat.doctor_name, stat.full_name, `Doctor ${index + 1}`)
-            const rating = Number(
-              firstValue(stat.average_rating, stat.avg_rating, stat.rating, 0),
-            )
-
-            return (
-              <div key={doctorName} className={`${cardClasses} p-5`}>
-                <p className="text-sm font-semibold text-slate-900">{doctorName}</p>
-                <div className="mt-3 flex items-center justify-between">
-                  <Stars rating={Math.round(rating)} />
-                  <span className="text-lg font-semibold text-slate-900">{rating.toFixed(1)}</span>
-                </div>
-              </div>
-            )
-          })
-        )}
-      </div>
-
-      <SectionShell
-        description="Latest patient sentiment and care quality feedback."
-        title="Feedback"
-      >
-        <div className="mb-6 grid gap-4 md:grid-cols-3">
-          <Field label="Doctor">
-            <select
-              className={inputClasses}
-              onChange={(event) =>
-                setFeedbackFilters((current) => ({ ...current, doctor: event.target.value }))
-              }
-              value={feedbackFilters.doctor}
-            >
-              <option value="">All doctors</option>
-              {feedbackDoctorNames.map((doctorName) => (
-                <option key={doctorName} value={doctorName}>
-                  {doctorName}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Rating">
-            <select
-              className={inputClasses}
-              onChange={(event) =>
-                setFeedbackFilters((current) => ({ ...current, rating: event.target.value }))
-              }
-              value={feedbackFilters.rating}
-            >
-              <option value="">All ratings</option>
-              <option value="5">5 stars</option>
-              <option value="4">4 stars</option>
-              <option value="3">3 stars</option>
-              <option value="2">2 stars</option>
-              <option value="1">1 star</option>
-            </select>
-          </Field>
-          <Field label="Search">
-            <input
-              className={inputClasses}
-              onChange={(event) =>
-                setFeedbackFilters((current) => ({ ...current, search: event.target.value }))
-              }
-              placeholder="Patient, doctor, or comment"
-              type="text"
-              value={feedbackFilters.search}
-            />
-          </Field>
-        </div>
-
-        {feedbackQuery.isLoading ? (
-          <SharedLoadingSpinner size="md" />
-        ) : feedbackQuery.isError ? (
-          <ErrorBanner message={getErrorMessage(feedbackQuery.error, 'Failed to load feedback.')} />
-        ) : filteredFeedbackEntries.length === 0 ? (
-          <SharedEmptyState message="No feedback has been submitted yet." title="No Feedback" />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-[0.18em] text-slate-500">
-                <tr>
-                  <th className="pb-3 pr-4 font-medium">Patient</th>
-                  <th className="pb-3 pr-4 font-medium">Doctor</th>
-                  <th className="pb-3 pr-4 font-medium">Rating</th>
-                  <th className="pb-3 pr-4 font-medium">Comment</th>
-                  <th className="pb-3 font-medium">Date</th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginatedFeedbackEntries.map((item) => (
-                  <tr key={item.id} className="border-b border-slate-100 align-top">
-                    <td className="py-4 pr-4 font-medium text-slate-900">{item.patient_name}</td>
-                    <td className="py-4 pr-4 text-slate-600">{item.doctor_name}</td>
-                    <td className="py-4 pr-4">
-                      <Stars rating={item.rating} />
-                    </td>
-                    <td className="py-4 pr-4 text-slate-600">{item.comment}</td>
-                    <td className="py-4 text-slate-600">{formatDate(item.date)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <Pagination
-          page={feedbackPage}
-          totalPages={Math.max(1, Math.ceil(filteredFeedbackEntries.length / PAGE_SIZE))}
-          onPageChange={setFeedbackPage}
-        />
-      </SectionShell>
-    </div>
-  )

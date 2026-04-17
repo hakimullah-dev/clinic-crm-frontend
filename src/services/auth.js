@@ -1,8 +1,7 @@
 import api from '../lib/api.js'
-
-const unwrapData = (response) => response.data?.data ?? response.data
+import { normalizeRegisterUserResponse } from '../lib/clinicData.js'
 
 export const registerUser = async (data) => {
   const response = await api.post('/api/auth/register', data)
-  return unwrapData(response)
+  return normalizeRegisterUserResponse(response.data)
 }

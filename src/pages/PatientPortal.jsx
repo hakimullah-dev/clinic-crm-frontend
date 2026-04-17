@@ -9,6 +9,7 @@ import EmptyState from '../components/ui/EmptyState.jsx'
 import LoadingSpinner from '../components/ui/LoadingSpinner.jsx'
 import { useToast } from '../components/ui/Toast.jsx'
 import { clearStoredAuth, getStoredUser } from '../lib/auth.js'
+import { coerceBoolean, normalizeDelimitedList, normalizeSlotOptions } from '../lib/clinicData.js'
 import { getApiErrorMessage } from '../lib/config.js'
 import {
   addDaysToDateKey,
@@ -142,24 +143,34 @@ const normalizeDoctor = (doctor = {}) => ({
   id: firstValue(doctor.id, doctor._id, doctor.doctor_id, doctor.user_id, ''),
   full_name: firstValue(doctor.full_name, doctor.name, 'Doctor'),
   specialty: firstValue(doctor.specialty, doctor.specialisation, 'General Practice'),
-  working_days: Array.isArray(doctor.working_days)
-    ? doctor.working_days
-    : Array.isArray(doctor.workingDays)
-      ? doctor.workingDays
-      : typeof firstValue(doctor.working_days, doctor.workingDays) === 'string'
-        ? firstValue(doctor.working_days, doctor.workingDays)
-            .split(',')
-            .map((day) => day.trim())
-            .filter(Boolean)
-        : [],
+  working_days: normalizeDelimitedList(firstValue(doctor.working_days, doctor.workingDays)),
   start_time: firstValue(doctor.start_time, doctor.startTime, ''),
   end_time: firstValue(doctor.end_time, doctor.endTime, ''),
+  slot_duration_mins: Number(
+    firstValue(doctor.slot_duration_mins, doctor.slotDurationMins, 15),
+  ),
+  consultation_duration_mins: Number(
+    firstValue(
+      doctor.consultation_duration_mins,
+      doctor.consultationDurationMins,
+      doctor.consultation_duration,
+      doctor.consultationDuration,
+      doctor.slot_duration_mins,
+      doctor.slotDurationMins,
+      15,
+    ),
+  ),
+  accepting_patients: coerceBoolean(
+    firstValue(
+      doctor.accepting_patients,
+      doctor.acceptingPatients,
+      doctor.is_accepting_patients,
+      doctor.isAcceptingPatients,
+      true,
+    ),
+    true,
+  ),
 })
-
-const normalizeSlots = (slotsPayload) =>
-  ensureArray(slotsPayload, ['slots', 'data']).map((slot) =>
-    typeof slot === 'string' ? slot : firstValue(slot.value, slot.time, slot.start_time, ''),
-  )
 
 const normalizeFeedback = (feedback) => {
   if (!feedback || typeof feedback !== 'object') {
@@ -353,7 +364,7 @@ function PatientPortal() {
     queryKey: ['patient', 'booking', 'slots', bookingDraft.doctor_id, bookingDraft.date],
     queryFn: async () => {
       const payload = await getSlots(bookingDraft.doctor_id, bookingDraft.date)
-      return normalizeSlots(payload).filter(Boolean)
+      return normalizeSlotOptions(payload)
     },
     enabled:
       activeTab === 'booking' &&
@@ -695,11 +706,18 @@ function PatientPortal() {
                       ? 'border-cyan-300 bg-cyan-50 ring-2 ring-cyan-100'
                       : 'border-slate-200 bg-white hover:border-cyan-200 hover:bg-slate-50'
                   }`}
+                  disabled={!doctor.accepting_patients}
                   onClick={() => handleBookingDoctorSelect(doctor.id)}
                   type="button"
                 >
                   <p className="text-lg font-semibold text-slate-900">{doctor.full_name}</p>
                   <p className="mt-2 text-sm text-slate-600">{doctor.specialty}</p>
+                  <p className="mt-3 text-xs uppercase tracking-[0.16em] text-slate-500">
+                    Accepting Patients
+                  </p>
+                  <p className="mt-1 text-sm text-slate-700">
+                    {doctor.accepting_patients ? 'Yes' : 'No'}
+                  </p>
                   <p className="mt-4 text-xs uppercase tracking-[0.16em] text-slate-500">
                     Availability Days
                   </p>
@@ -708,6 +726,9 @@ function PatientPortal() {
                   </p>
                   <p className="mt-3 text-sm text-slate-600">
                     {doctor.start_time || '09:00'} to {doctor.end_time || '17:00'}
+                  </p>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Consultation {doctor.consultation_duration_mins || doctor.slot_duration_mins || 15} mins
                   </p>
                 </button>
               )

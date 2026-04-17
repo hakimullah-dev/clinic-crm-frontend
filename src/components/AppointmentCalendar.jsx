@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { formatDate, formatShort, formatTime, getSydneyToday, isToday } from '../lib/datetime.js'
 import { getAppointments } from '../services/appointments.js'
 import ConfirmDialog from './ui/ConfirmDialog.jsx'
@@ -76,7 +77,6 @@ const normalizeAppointment = (appointment = {}) => ({
 
 function AppointmentCalendar({ appointments: externalAppointments }) {
   const [weekStart, setWeekStart] = useState(() => getWeekStart(getSydneyToday()))
-  const [appointments, setAppointments] = useState([])
   const [selectedAppointment, setSelectedAppointment] = useState(null)
   const weekEnd = useMemo(() => addDays(weekStart, 5), [weekStart])
 
@@ -85,24 +85,25 @@ function AppointmentCalendar({ appointments: externalAppointments }) {
     [weekStart],
   )
 
-  useEffect(() => {
-    if (Array.isArray(externalAppointments)) {
-      setAppointments(externalAppointments.map(normalizeAppointment))
-      return
-    }
+  const from = useMemo(() => toDateKey(weekStart), [weekStart])
+  const to = useMemo(() => toDateKey(weekEnd), [weekEnd])
 
-    const from = formatShort(weekStart)
-    const to = formatShort(weekEnd)
+  const appointmentsQuery = useQuery({
+    queryKey: ['appointments', 'calendar', from, to],
+    queryFn: async () => {
+      const data = await getAppointments({ from, to })
+      return ensureArray(data, ['appointments', 'data']).map(normalizeAppointment)
+    },
+    enabled: !Array.isArray(externalAppointments),
+  })
 
-    getAppointments({ from, to })
-      .then((data) => {
-        setAppointments(ensureArray(data, ['appointments', 'data']).map(normalizeAppointment))
-      })
-      .catch((error) => {
-        console.error(error)
-        setAppointments([])
-      })
-  }, [externalAppointments, weekEnd, weekStart])
+  const appointments = useMemo(
+    () =>
+      Array.isArray(externalAppointments)
+        ? externalAppointments.map(normalizeAppointment)
+        : appointmentsQuery.data || [],
+    [appointmentsQuery.data, externalAppointments],
+  )
 
   const groupedAppointments = useMemo(() => {
     return appointments.reduce((result, appointment) => {
@@ -147,6 +148,11 @@ function AppointmentCalendar({ appointments: externalAppointments }) {
       </div>
 
       <div className="grid gap-4 lg:grid-cols-6">
+        {!Array.isArray(externalAppointments) && appointmentsQuery.isError ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 lg:col-span-6">
+            Unable to load calendar appointments.
+          </div>
+        ) : null}
         {weekDays.map((day) => {
           const key = toDateKey(day)
           const dayAppointments = (groupedAppointments[key] || []).sort((a, b) => {
